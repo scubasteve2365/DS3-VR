@@ -18,16 +18,18 @@ WHAT YOU NEED
 - Helifax's Dark Souls 3 geo-11 fix (step 1)
 
 
-STEP 1: GET HELIFAX'S GEO-11 FIX
---------------------------------
+STEP 1: HELIFAX'S GEO-11 FIX (USUALLY AUTOMATIC)
+------------------------------------------------
 DS3 VR is built on Helifax's fix and the geo-11 3D driver. Their licences do not allow anyone else to
-pass their files on, so you download them yourself:
+pass their files on, so they cannot be in the DS3 VR download. You normally do not need to do
+anything here: in step 3, install-ds3vr.bat offers to download the fix from masterotaku's server
+(the one Helifax's page links to), checks that it is the geo-11 version, and unpacks it.
 
+If that download does not work, get it yourself:
 1. Open https://helixmod.blogspot.com/2016/04/dark-souls-3-3d-vision-fix.html
 2. Download Dark_Souls_3_geo11_fix.7z (the geo-11 version, not the 3D Vision one).
 3. Put it in the game's Game folder (the folder with DarkSoulsIII.exe), or leave it in your
-   Downloads folder. You do not need to extract it: step 3 does that, including the second archive
-   (FixFiles.7z) inside it. If you already extracted it into the Game folder, that is fine too.
+   Downloads folder, and run install-ds3vr.bat again. You do not need to extract it.
 
 Game folder example: C:\Program Files (x86)\Steam\steamapps\common\DARK SOULS III\Game
 
@@ -43,7 +45,7 @@ STEP 3: RUN install-ds3vr.bat
 Double-click install-ds3vr.bat in the Game folder (Windows may ask whether to run a downloaded file:
 choose Run). This step exists only because geo-11 and Helifax's fix cannot be included in the DS3 VR
 download. It:
-- unpacks Helifax's fix if it is still in its archive
+- downloads Helifax's fix if it is not there yet (it asks first), checks it, and unpacks it
 - backs up every file it changes into Game\ds3vr_backup
 - switches geo-11 to VR output and adds a few lines to five of the fix's shaders (HUD, lock-on
   marker and sun rays)

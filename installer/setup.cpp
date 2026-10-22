@@ -10,9 +10,12 @@
 #include <bcrypt.h>
 #include <shlobj.h>
 #include <knownfolders.h>
+#include <urlmon.h>
+#include <wininet.h>
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -310,6 +313,74 @@ bool Unpack(const std::wstring& archive, const std::wstring& dest) {
 
 // Helifax's download is a 7z (Dark_Souls_3_geo11_fix.7z) that holds a second 7z (FixFiles.7z)
 // plus LICENSE.txt. The fix itself is inside FixFiles.7z. Handle either one being found.
+// Where Helifax's fix can be fetched from (masterotaku's server, linked from Helifax's HelixMod page).
+// Each download is checked before it is used, so a wrong package (the 3D Vision version) or a changed
+// file is never installed: it must contain geo-11 (d3d11.dll, d3dx.ini and d3dxdm.ini).
+const wchar_t* kFixUrls[] = {
+    L"https://s3.amazonaws.com/masterotaku/Dark+Souls+3/Dark_Souls_3_3D_Vision_fix.7z",
+    L"https://s3.amazonaws.com/masterotaku/Dark+Souls+3/Dark_Souls_3_geo11_fix.7z",
+};
+const char* kTestedFixArchiveSha256 = "2ca06af593da735876a4471516f54c6e96c8e2fc023d8c5973e90bd93df99a8d";  // Dark_Souls_3_geo11_fix.7z, 21 Oct 2023
+
+bool HasGeo11(const std::wstring& dir) {
+    return Exists(dir + L"\\d3d11.dll") && Exists(dir + L"\\d3dx.ini") && Exists(dir + L"\\d3dxdm.ini");
+}
+
+bool UnpackQuiet(const std::wstring& archive, const std::wstring& dest) {
+    std::string err;
+    return Extract7z(archive, dest, err, nullptr);
+}
+
+// Downloads Helifax's fix and checks it. On success the archive is in the Game folder under the name
+// the rest of the install expects (Dark_Souls_3_geo11_fix.7z, or FixFiles.7z when the download is the
+// inner archive itself), and true is returned.
+bool DownloadFix(const std::wstring& game) {
+    const std::wstring work = game + L"\\ds3vr\\download";
+    std::error_code ec;
+    std::vector<std::wstring> urls;
+    wchar_t env[2048] = {};
+    if (GetEnvironmentVariableW(L"DS3VR_FIX_URL", env, 2048) > 0) urls.push_back(env);  // for testing another source
+    for (const wchar_t* u : kFixUrls) urls.push_back(u);
+    for (const std::wstring& u : urls) {
+        const wchar_t* url = u.c_str();
+        std::filesystem::remove_all(work, ec);
+        MakeDirs(work + L"\\check");
+        const std::wstring file = work + L"\\fix.7z";
+        Say("Downloading " + Narrow(url) + " ...");
+        DeleteUrlCacheEntryW(url);
+        if (FAILED(URLDownloadToFileW(nullptr, url, file.c_str(), 0, nullptr)) || !Exists(file)) {
+            Say("  could not download it.");
+            continue;
+        }
+        const bool tested = Sha256(file) == kTestedFixArchiveSha256;
+        const std::wstring check = work + L"\\check";
+        bool ok = false, nested = false;
+        if (UnpackQuiet(file, check)) {
+            if (Exists(check + L"\\" + kInnerName)) {
+                nested = true;
+                ok = UnpackQuiet(check + L"\\" + kInnerName, check + L"\\fix") && HasGeo11(check + L"\\fix");
+            } else {
+                ok = HasGeo11(check);
+            }
+        }
+        if (!ok) {
+            Say("  that file is not the geo-11 version of the fix (perhaps the 3D Vision one), so it was not used.");
+            continue;
+        }
+        const std::wstring dest = game + L"\\" + (nested ? kOuterName : kInnerName);
+        if (!CopyFileW(file.c_str(), dest.c_str(), FALSE)) {
+            Say("  could not save it in the Game folder.");
+            continue;
+        }
+        std::filesystem::remove_all(work, ec);
+        Say(tested ? "  OK: the geo-11 fix, the exact version DS3 VR was tested with."
+                   : "  OK: the geo-11 fix (a different version from the one DS3 VR was tested with).");
+        return true;
+    }
+    std::filesystem::remove_all(work, ec);
+    return false;
+}
+
 bool EnsureFix(const std::wstring& game) {
     std::wstring missing = MissingFixFile(game);
     if (missing.empty()) return true;
@@ -318,13 +389,22 @@ bool EnsureFix(const std::wstring& game) {
     std::wstring inner = FirstExisting({game, sub}, kInnerName);
     std::wstring outer = inner.empty() ? FirstExisting({game, parent, SetupDir(), DownloadsDir()}, kOuterName) : L"";
     if (inner.empty() && outer.empty()) {
-        Say("Helifax's Dark Souls 3 geo-11 fix is not installed (" + Narrow(missing) + " is missing).");
-        Say("Download Dark_Souls_3_geo11_fix.7z from https://helixmod.blogspot.com/2016/04/dark-souls-3-3d-vision-fix.html");
-        Say("and put it in the Game folder or your Downloads folder, then run this setup again.");
-        Say("Setup will unpack it for you.");
+        Say("Helifax's Dark Souls 3 geo-11 fix is not in this Game folder yet.");
+        Say("DS3 VR can download it for you from masterotaku's server (linked from Helifax's HelixMod page),");
+        Say("about 6 MB. It is checked before it is used.");
+        if (AskYes("Download it now?", true) && DownloadFix(game)) {
+            inner = FirstExisting({game}, kInnerName);
+            outer = inner.empty() ? FirstExisting({game}, kOuterName) : L"";
+        }
+    }
+    if (inner.empty() && outer.empty()) {
+        Say("");
+        Say("Please download it yourself: open https://helixmod.blogspot.com/2016/04/dark-souls-3-3d-vision-fix.html,");
+        Say("download Dark_Souls_3_geo11_fix.7z (the geo-11 version, not the 3D Vision one), put it in the Game");
+        Say("folder or your Downloads folder, then run install-ds3vr.bat again.");
         return false;
     }
-    Say("Helifax's geo-11 fix is downloaded but not unpacked yet:");
+    Say("Helifax's geo-11 fix is ready to unpack:");
     Say("  " + Narrow(inner.empty() ? outer : inner));
     if (!inner.empty()) Say("(FixFiles.7z is the archive inside Helifax's download that holds the actual fix.)");
     if (!AskYes("Unpack it into the Game folder now?", true)) {

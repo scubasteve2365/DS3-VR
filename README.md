@@ -23,16 +23,18 @@ marker in 3D, and an in-headset menu.
 
 ## Install
 
-1. Download `Dark_Souls_3_geo11_fix.7z` from the HelixMod page above (the geo-11 version, not the
-   3D Vision one). Put it in the game's `Game` folder (the one with `DarkSoulsIII.exe`), or leave it
-   in your Downloads folder. You do not need to extract it.
-2. Download the latest DS3 VR zip from [Releases](../../releases) and extract all of it into the same
-   `Game` folder.
-3. Run `install-ds3vr.bat` in the `Game` folder. This step exists only because geo-11 and Helifax's
-   fix cannot be included in the download: it unpacks Helifax's fix if needed, backs up every file it
+1. Download the latest DS3 VR zip from [Releases](../../releases) and extract all of it into the game's
+   `Game` folder (the one with `DarkSoulsIII.exe`).
+2. Run `install-ds3vr.bat` in the `Game` folder. This step exists only because geo-11 and Helifax's
+   fix cannot be included in the download: it downloads Helifax's fix from its official host (it asks
+   first, and checks that it is the geo-11 version), unpacks it, backs up every file it
    changes into `Game\ds3vr_backup`, switches geo-11 to VR output, and sets the game's graphics
    options for VR.
-4. Start your VR runtime, then launch Dark Souls III from Steam as usual.
+3. Start your VR runtime, then launch Dark Souls III from Steam as usual.
+
+If the automatic download does not work, download `Dark_Souls_3_geo11_fix.7z` (the geo-11 version,
+not the 3D Vision one) from the HelixMod page above, put it in the `Game` folder or your Downloads
+folder, and run `install-ds3vr.bat` again.
 
 To update, extract the new zip over the old one and run `install-ds3vr.bat` again; your settings are
 kept. To uninstall, run `uninstall-ds3vr.bat`: it restores every file it changed and removes DS3 VR.

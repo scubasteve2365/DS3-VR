@@ -29,7 +29,7 @@ for f in Bcj2 Bra Bra86 BraIA64 CpuArch Delta Lzma2Dec LzmaDec Ppmd7 Ppmd7Dec 7z
   $CC -O2 -DZ7_PPMD_SUPPORT -DZ7_EXTRACT_ONLY -c $Z/$f.c -o $O/7z_$f.o
 done
 $CXX -O2 -std=c++17 -municode -static -I$Z -o build/ds3vr-patcher.exe installer/setup.cpp installer/patch.cpp installer/sevenzip.cpp \
-  $O/7z_*.o -lbcrypt -lshell32 -lole32 -ladvapi32 -luuid
+  $O/7z_*.o -lbcrypt -lshell32 -lole32 -ladvapi32 -luuid -lurlmon -lwininet
 x86_64-w64-mingw32-strip build/ds3vr-patcher.exe
 rm -rf $O
 
