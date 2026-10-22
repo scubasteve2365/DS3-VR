@@ -9,7 +9,7 @@ DS3 VR works on top of **Helifax's Dark Souls 3 geo-11 fix**, which does the ste
 mod adds the VR side: OpenXR output to your headset, head tracking, the HUD panel, the lock-on
 marker in 3D, and an in-headset menu.
 
-**Download:** see [Releases](../../releases). Each release has a zip with the setup and its own README.
+**Download:** see [Releases](../../releases). Each release is a zip you extract into the game's `Game` folder.
 
 ## What you need
 
@@ -26,15 +26,16 @@ marker in 3D, and an in-headset menu.
 1. Download `Dark_Souls_3_geo11_fix.7z` from the HelixMod page above (the geo-11 version, not the
    3D Vision one). Put it in the game's `Game` folder (the one with `DarkSoulsIII.exe`), or leave it
    in your Downloads folder. You do not need to extract it.
-2. Download the latest DS3 VR zip from [Releases](../../releases), extract it anywhere, and run
-   `DS3VR-Setup.exe`. Windows may warn that it is from an unknown publisher: click **More info**,
-   then **Run anyway**.
-3. The setup finds the game through Steam, unpacks Helifax's fix if needed, backs up every file it
+2. Download the latest DS3 VR zip from [Releases](../../releases) and extract all of it into the same
+   `Game` folder.
+3. Run `install-ds3vr.bat` in the `Game` folder. This step exists only because geo-11 and Helifax's
+   fix cannot be included in the download: it unpacks Helifax's fix if needed, backs up every file it
    changes into `Game\ds3vr_backup`, switches geo-11 to VR output, and sets the game's graphics
-   options for VR. Press **I** to install.
+   options for VR.
 4. Start your VR runtime, then launch Dark Souls III from Steam as usual.
 
-To uninstall, run the setup again and press **U**. It restores every file it changed.
+To update, extract the new zip over the old one and run `install-ds3vr.bat` again; your settings are
+kept. To uninstall, run `uninstall-ds3vr.bat`: it restores every file it changed and removes DS3 VR.
 
 ## In game
 
@@ -96,18 +97,20 @@ sudo apt install g++-mingw-w64-x86-64
 ./build.sh
 ```
 
-This produces `build/dinput8.dll` (the mod) and `build/DS3VR-Setup.exe` (the installer).
-`ds3vr.ini` is the default settings file that ships next to the dll.
+This produces `build/dinput8.dll` (the mod), `build/ds3vr-patcher.exe` (run by the install and
+uninstall batch files) and `build/DS3VR-<version>/`, the release layout that players extract into the
+game's `Game` folder. `dist` holds the batch files, the player README and the default settings.
 
 | Folder | Contents |
 |---|---|
 | `src` | The mod: OpenXR output, head tracking, HUD panel, menu, resolution and frame rate handling |
-| `installer` | The setup: finds the game, unpacks and checks Helifax's fix, patches it for VR, backs up and restores |
+| `installer` | The patcher: unpacks and checks Helifax's fix, patches it for VR, backs up and restores |
+| `dist` | Files shipped as they are: install and uninstall batch files, player README, default settings |
 | `tools` | A patch test that runs the installer's patches on Helifax's files outside Windows |
 | `third_party` | Dear ImGui, MinHook, the OpenXR headers and 7-Zip's C decoder |
 
 No files from geo-11 or Helifax's fix are in this repository: their licences do not allow
-redistribution. The installer only patches the copy each player downloads.
+redistribution. The install step only patches the copy each player downloads.
 
 ## Credits
 

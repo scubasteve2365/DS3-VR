@@ -38,9 +38,40 @@ void LogBanner() {
 // ds3vr.ini (next to dinput8.dll):
 //   [ds3vr]
 //   Enabled=1    ; 0 = pure DirectInput passthrough, no hooks, behaves like stock
+// Set up = install-ds3vr.bat has run: geo-11 is present and switched to VR output. Without that (the
+// zip extracted but not installed yet, or Helifax's fix missing) the mod stays out of the way and says so.
+int g_setupState = -1;  // -1 = not checked, 0 = not set up, 1 = set up
+const wchar_t* g_setupProblem = L"";
+
+bool IsSetUp() {
+    if (g_setupState >= 0) return g_setupState == 1;
+    const std::wstring dir = ds3vr::ModuleDir();
+    g_setupState = 0;
+    if (GetFileAttributesW((dir + L"d3d11.dll").c_str()) == INVALID_FILE_ATTRIBUTES) {
+        g_setupProblem = L"Helifax's Dark Souls 3 geo-11 fix is not installed in this Game folder (d3d11.dll is missing).\n\n"
+                         L"Install it as described in ds3vr\\README.txt, then run install-ds3vr.bat.";
+        return false;
+    }
+    HANDLE f = CreateFileW((dir + L"d3dxdm.ini").c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    std::string text;
+    if (f != INVALID_HANDLE_VALUE) {
+        char buf[16384];
+        DWORD got = 0;
+        if (ReadFile(f, buf, sizeof(buf), &got, nullptr)) text.assign(buf, got);
+        CloseHandle(f);
+    }
+    if (text.find("katanga_vr") == std::string::npos) {
+        g_setupProblem = L"DS3 VR is in this Game folder but has not been set up yet.\n\n"
+                         L"Close the game and run install-ds3vr.bat (in the Game folder), then start the game again.";
+        return false;
+    }
+    g_setupState = 1;
+    return true;
+}
+
 bool IsEnabled() {
     std::wstring ini = std::wstring(ds3vr::ModuleDir()) + L"ds3vr.ini";
-    return GetPrivateProfileIntW(L"ds3vr", L"Enabled", 1, ini.c_str()) != 0;
+    return GetPrivateProfileIntW(L"ds3vr", L"Enabled", 1, ini.c_str()) != 0 && IsSetUp();
 }
 
 // Logs the first few access violations (where and in which module) so a crash leaves a trail.
@@ -82,7 +113,12 @@ DWORD WINAPI InitThread(LPVOID) {
     AddVectoredExceptionHandler(1, CrashLogger);
     LogBanner();
     if (!IsEnabled()) {
-        ds3vr::Log("ds3vr.ini says Enabled=0: hooks NOT installed, passthrough only");
+        if (g_setupState == 0) {
+            ds3vr::Log("not set up, so DS3 VR stays off this run: %ls", g_setupProblem);
+            MessageBoxW(nullptr, g_setupProblem, L"DS3 VR", MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
+        } else {
+            ds3vr::Log("ds3vr.ini says Enabled=0: hooks NOT installed, passthrough only");
+        }
         return 0;
     }
     ds3vr::RenderSizePatchLetterbox();
