@@ -72,9 +72,21 @@ void ReadSettings() {
     if (g_worldScale < 0.1f || g_worldScale > 20.f) g_worldScale = 1.f;
     g_aspectMode = GetPrivateProfileIntW(L"ds3vr", L"HeadsetAspect", 1, ini.c_str());
     g_leftHalf = GetPrivateProfileIntW(L"ds3vr", L"LeftEyeHalf", 1, ini.c_str()) ? 1 : 0;
-    GetPrivateProfileStringW(L"ds3vr", L"StereoShift", L"0.1047", v, 32, ini.c_str());
-    float s = static_cast<float>(_wtof(v));
-    if (s < -0.5f || s > 0.5f) s = 0.f;
+    // geo-11 slides each eye's image sideways by a fixed amount, which the views we send to the headset
+    // cancel. It depends only on geo-11's separation, which DS3 VR resets to 20 every launch, where it
+    // was measured as 0.0187. So it is not read from ds3vr.ini any more (a 0 or a typo there gave a
+    // doubled picture); StereoShiftOverride (non-zero) is only for testing.
+    constexpr float kStereoShiftSep20 = 0.0187f;
+    float s = kStereoShiftSep20;
+    GetPrivateProfileStringW(L"ds3vr", L"StereoShiftOverride", L"0", v, 32, ini.c_str());
+    const float over = static_cast<float>(_wtof(v));
+    if (over > 0.001f && over < 0.5f) {
+        s = over;
+        Log("settings: StereoShiftOverride %.4f in ds3vr.ini replaces the calculated %.4f", over, kStereoShiftSep20);
+    }
+    GetPrivateProfileStringW(L"ds3vr", L"StereoShift", L"", v, 32, ini.c_str());
+    if (v[0] && std::fabs(static_cast<float>(_wtof(v)) - kStereoShiftSep20) > 0.0005f)
+        Log("settings: StereoShift=%ls in ds3vr.ini is no longer used (the mod calculates %.4f itself)", v, kStereoShiftSep20);
     g_shift.store(s);
     g_hudMode.store(GetPrivateProfileIntW(L"ds3vr", L"HudMode", 0, ini.c_str()) % 3);
     GetPrivateProfileStringW(L"ds3vr", L"HudDistance", L"1.2", v, 32, ini.c_str());

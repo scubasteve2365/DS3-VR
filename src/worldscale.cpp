@@ -57,6 +57,27 @@ bool SetLine(std::string& s, const std::string& key, const std::string& value) {
     return false;
 }
 
+const char* const kSeparation = "20";  // geo-11 dm_separation the VR alignment (StereoShift) is measured for
+
+// The value of "key = value" at the start of a line, or "" if there is none.
+std::string GetLine(const std::string& s, const std::string& key) {
+    size_t p = 0;
+    while ((p = s.find(key, p)) != std::string::npos) {
+        const bool lineStart = p == 0 || s[p - 1] == '\n';
+        const size_t eq = s.find_first_not_of(" \t", p + key.size());
+        if (lineStart && eq != std::string::npos && s[eq] == '=') {
+            const size_t a = s.find_first_not_of(" \t", eq + 1);
+            const size_t b = s.find_first_of("\r\n", eq + 1);
+            if (a == std::string::npos || a >= b) return std::string();
+            std::string v = s.substr(a, b - a);
+            while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.pop_back();
+            return v;
+        }
+        p += key.size();
+    }
+    return std::string();
+}
+
 float Snap(float s) {
     s = std::round(s * 2.f) / 2.f;
     return s < 1.f ? 1.f : s > 5.f ? 5.f : s;
@@ -87,6 +108,18 @@ void WorldScaleEarly() {
     if (ReadAll(Path(L"d3dxdm.ini"), dm)) {
         const std::string before = dm;
         ok = SetLine(dm, "dm_convergence", Conv(g_scale));
+        // The VR image alignment is calculated for geo-11 separation 20 with automatic convergence off.
+        // Put both back every launch, so a change made by hand or with geo-11's hotkeys cannot leave
+        // the two eyes misaligned (a doubled, out-of-focus picture).
+        const std::string sep = GetLine(dm, "dm_separation"), autoConv = GetLine(dm, "dm_auto_convergence");
+        if (!sep.empty() && sep != kSeparation) {
+            SetLine(dm, "dm_separation", kSeparation);
+            Log("WORLDSCALE: geo-11 separation was %s; reset to %s (DS3 VR is aligned for it)", sep.c_str(), kSeparation);
+        }
+        if (!autoConv.empty() && autoConv != "0") {
+            SetLine(dm, "dm_auto_convergence", "0");
+            Log("WORLDSCALE: geo-11 automatic convergence was on; switched off (DS3 VR sets convergence itself)");
+        }
         // geo-11's convergence limits (3 / 4) are below the larger world scales; lift them so a saved
         // scale is not clipped at startup.
         SetLine(dm, "dm_max_convergence_soft", "10.0");
