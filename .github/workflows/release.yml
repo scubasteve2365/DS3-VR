@@ -1,0 +1,55 @@
+# Publishes a release when the version in src/version.h has a notes file in dist/release-notes/
+# (for example dist/release-notes/0.10.1.md) and that version has not been released yet.
+# Every other push to main does nothing here, so everyday changes never become releases.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is there a new version to release?
+        id: check
+        run: |
+          V=$(sed -n 's/.*DS3VR_VERSION "\(.*\)".*/\1/p' src/version.h)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if [ ! -f "dist/release-notes/$V.md" ]; then
+            echo "No dist/release-notes/$V.md, so $V is not being released."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          elif gh release view "v$V" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v$V is already released."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Releasing v$V."
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install the mingw-w64 toolchain
+        if: steps.check.outputs.go == 'true'
+        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64 zip
+
+      - name: Build
+        if: steps.check.outputs.go == 'true'
+        run: sh build.sh
+
+      - name: Package and publish
+        if: steps.check.outputs.go == 'true'
+        run: |
+          V=${{ steps.check.outputs.version }}
+          (cd "build/DS3VR-$V" && zip -r "../DS3VR-$V.zip" .)
+          gh release create "v$V" "build/DS3VR-$V.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "DS3 VR $V" \
+            --notes-file "dist/release-notes/$V.md"
