@@ -54,7 +54,7 @@ straight away.
 
 ### Graphics settings
 
-The setup sets these for you. Keep Motion Blur and Depth of Field off; the rest is up to you.
+The install step sets these for you. Keep Motion Blur and Depth of Field off; the rest is up to you.
 
 | Setting | Set to | Why |
 |---|---|---|
