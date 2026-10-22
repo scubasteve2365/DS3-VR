@@ -116,3 +116,8 @@ redistribution. The installer only patches the copy each player downloads.
 - **3Dmigoto:** bo3b, Flugan and DarkStarSword
 - Ideas from Luke Ross's R.E.A.L. VR and praydog's UEVR
 - Third-party code: see [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt)
+
+## Licence
+
+DS3 VR's own code is under the [MIT licence](LICENSE). geo-11 and Helifax's fix have their own
+licences and are not part of this repository.
