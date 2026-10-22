@@ -316,8 +316,9 @@ bool Unpack(const std::wstring& archive, const std::wstring& dest) {
 // Where Helifax's fix can be fetched from (masterotaku's server, linked from Helifax's HelixMod page).
 // Each download is checked before it is used, so a wrong package (the 3D Vision version) or a changed
 // file is never installed: it must contain geo-11 (d3d11.dll, d3dx.ini and d3dxdm.ini).
+// Confirmed 2026-10-22: this serves the exact archive DS3 VR was tested with. (The 3D Vision package
+// next to it, Dark_Souls_3_3D_Vision_fix.7z, is the wrong one and is rejected by the check.)
 const wchar_t* kFixUrls[] = {
-    L"https://s3.amazonaws.com/masterotaku/Dark+Souls+3/Dark_Souls_3_3D_Vision_fix.7z",
     L"https://s3.amazonaws.com/masterotaku/Dark+Souls+3/Dark_Souls_3_geo11_fix.7z",
 };
 const char* kTestedFixArchiveSha256 = "2ca06af593da735876a4471516f54c6e96c8e2fc023d8c5973e90bd93df99a8d";  // Dark_Souls_3_geo11_fix.7z, 21 Oct 2023
