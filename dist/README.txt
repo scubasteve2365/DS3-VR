@@ -83,6 +83,13 @@ The VR menu shows the resolution per eye: what the game renders now, what your V
 and what the next launch will use. To change it, change the resolution in your runtime (SteamVR,
 Virtual Desktop, the Meta app or Pimax Play) and restart the game.
 
+The first launch after installing renders wider than it needs to. The height always matches your
+VR runtime, but the width depends on your headset's field of view, which the game can only be told
+before it starts, and the headset reports it only once the game is running. So the first launch uses
+a wide default that fits any headset, and DS3 VR remembers your headset's real shape for every launch
+after that. Example: 5300 x 3700 per eye on the first launch, 4800 x 3700 from the second. Nothing
+needs doing; just expect the first launch to run a little heavier.
+
 
 UPDATING
 --------

@@ -81,6 +81,12 @@ The game renders a little wider than the runtime asks for, because DS3 can only 
 and has to cover the wider side of each eye. The height always matches. The frame rate is capped at
 your headset's refresh rate.
 
+**The first launch after installing renders wider than it needs to.** The width depends on your
+headset's field of view. The game has to be told its size before it starts, but the headset only
+reports its field of view once the game is running. So the first launch uses a wide default that
+fits any headset, and DS3 VR remembers your headset's real shape for every launch after that. For
+example: 5300 x 3700 per eye on the first launch, 4800 x 3700 from the second.
+
 ## Reporting a problem
 
 Open an [issue](../../issues) and attach `Game\ds3vr.log`. If a launch went wrong and you have since
