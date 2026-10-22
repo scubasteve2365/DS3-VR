@@ -14,6 +14,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -37,7 +38,15 @@ jobs:
 
       - name: Install the mingw-w64 toolchain
         if: steps.check.outputs.go == 'true'
-        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64 zip
+        timeout-minutes: 10
+        # Non-interactive, so no package prompt (e.g. needrestart) can wait for an answer that never comes.
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
+        run: |
+          sudo -E apt-get -o Acquire::Retries=3 update -q
+          sudo -E apt-get install -y -q --no-install-recommends g++-mingw-w64-x86-64-win32 binutils-mingw-w64-x86-64 zip
+          x86_64-w64-mingw32-g++ --version | head -1
 
       - name: Build
         if: steps.check.outputs.go == 'true'
