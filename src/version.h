@@ -1,2 +1,2 @@
 #pragma once
-#define DS3VR_VERSION "0.10.0"
+#define DS3VR_VERSION "0.10.1"

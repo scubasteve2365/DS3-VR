@@ -99,6 +99,7 @@ Vec3 g_refP{0, 0, 0};
 std::atomic<bool> g_recenterReq{true};
 std::atomic<bool> g_headTrack{true};
 std::atomic<bool> g_scaleHead{true};  // ds3vr.ini ScaleHeadMovement
+std::atomic<bool> g_horizonLock{false};  // ds3vr.ini HorizonLock (VR menu): off = the stick tilts the view as in the flat game
 float g_pullback = 0.f;  // ds3vr.ini CameraPullback: extra metres behind the game's camera
 float g_fovY = 0.f;  // ds3vr.ini FovY (degrees -> radians); 0 = automatic (from the headset)
 std::atomic<float> g_autoFovY{0.f};  // from the headset field of view, used when FovY=0
@@ -126,6 +127,30 @@ float YawOf(const Quat& q) {
     // Angle of the head's +Z (backward) axis about +Y. Rotating by -this angle brings the backward
     // axis to +Z, i.e. the forward axis to -Z: looking straight ahead at the moment of recentering.
     return std::atan2(m[0][2], m[2][2]);
+}
+
+// Horizon lock: keeps the game camera's heading but drops the up/down tilt the right stick gives it,
+// so the view stays level and only your head pitches it. The camera keeps the position the game gave
+// it (the stick still raises and lowers it around the character). World up is +Y; the camera's right
+// row is horizontal for DS3's yaw-and-pitch camera, so it defines the level heading.
+void LevelCamera(float* cam) {
+    float rx = cam[0], rz = cam[2];
+    const float len = std::sqrt(rx * rx + rz * rz);
+    if (len < 1e-4f) return;  // no usable heading: leave the camera as the game made it
+    rx /= len;
+    rz /= len;
+    // Keep the frame's own handedness and up direction: forward is +/-(right x up), with the sign the
+    // game's rows already have.
+    const float* r = cam;
+    const float* u = cam + 4;
+    const float* f = cam + 8;
+    const float cx = r[1] * u[2] - r[2] * u[1], cy = r[2] * u[0] - r[0] * u[2], cz = r[0] * u[1] - r[1] * u[0];
+    const float hand = (cx * f[0] + cy * f[1] + cz * f[2]) >= 0.f ? 1.f : -1.f;
+    const float up = u[1] >= 0.f ? 1.f : -1.f;
+    // right = (rx, 0, rz), up = (0, up, 0), forward = hand * (right x up) = hand * up * (-rz, 0, rx)
+    cam[0] = rx;                cam[1] = 0.f; cam[2] = rz;
+    cam[4] = 0.f;               cam[5] = up;  cam[6] = 0.f;
+    cam[8] = -hand * up * rz;   cam[9] = 0.f; cam[10] = hand * up * rx;
 }
 
 // Rotates the camera rows (right, up, forward, then position) by the head pose relative to the
@@ -190,6 +215,7 @@ void ExportDetour(void* self, void* out) {
             if (fy > 0.f) cam[16] = fy;  // +0x50: vertical field of view used for projection and culling
             if (g_pullback != 0.f)
                 for (int a = 0; a < 3; ++a) cam[12 + a] -= g_pullback * cam[8 + a];  // back along the forward row
+            if (g_horizonLock.load(std::memory_order_relaxed)) LevelCamera(cam);
             ApplyHead(cam, q, p);
             const uint64_t seq = g_appliedSeq.load(std::memory_order_relaxed) + 1;
             Applied& a = g_applied[seq % kRing];
@@ -255,6 +281,7 @@ void Init() {
         g_fovY = (deg >= 30.f && deg <= 130.f) ? deg * 3.14159265f / 180.f : 0.f;
         Log("CAMHOOK: vertical field of view %s", g_fovY > 0.f ? "from ds3vr.ini" : "automatic (from the headset)");
         g_scaleHead.store(GetPrivateProfileIntW(L"ds3vr", L"ScaleHeadMovement", 1, ini.c_str()) != 0);
+        g_horizonLock.store(GetPrivateProfileIntW(L"ds3vr", L"HorizonLock", 0, ini.c_str()) != 0);
         GetPrivateProfileStringW(L"ds3vr", L"CameraPullback", L"0", v, 32, ini.c_str());
         g_pullback = static_cast<float>(_wtof(v));
         if (g_pullback < -5.f || g_pullback > 20.f) g_pullback = 0.f;
@@ -357,6 +384,14 @@ bool CamHookMarkerParams(int lag, float out[16]) {
     if (!a.markerOk) return false;
     memcpy(out, a.marker, sizeof(a.marker));
     return true;
+}
+
+bool CamHookGetHorizonLock() { return g_horizonLock.load(); }
+
+void CamHookSetHorizonLock(bool on) {
+    g_horizonLock.store(on);
+    WritePrivateProfileStringW(L"ds3vr", L"HorizonLock", on ? L"1" : L"0", (std::wstring(ModuleDir()) + L"ds3vr.ini").c_str());
+    Log("menu: horizon lock %s", on ? "on (the stick no longer tilts the view)" : "off (free camera)");
 }
 
 bool CamHookGetScaleHead() { return g_scaleHead.load(); }

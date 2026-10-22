@@ -32,4 +32,9 @@ bool CamHookMarkerParams(int lag, float out[16]);
 bool CamHookGetScaleHead();
 void CamHookSetScaleHead(bool on);  // from the menu (developer section): applied now and saved
 
+// Horizon lock (VR menu, ds3vr.ini HorizonLock, default off): the right stick no longer tilts the view up
+// or down; the view stays level and only your head pitches it.
+bool CamHookGetHorizonLock();
+void CamHookSetHorizonLock(bool on);
+
 } // namespace ds3vr

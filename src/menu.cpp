@@ -203,6 +203,15 @@ void BuildUi() {
     const float ws = WorldScaleGet();
     snprintf(v, sizeof(v), "%.1f%s", ws, ws == 1.f ? "  (life size)" : "");
     if (const int d = Stepper("World scale", v, "ws")) WorldScaleSet(ws + 0.5f * d);
+    {
+        const bool lock = CamHookGetHorizonLock();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Horizon lock");
+        ImGui::SameLine(430.f);
+        if (lock) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.52f, 0.12f, 1.f));
+        if (ImGui::Button(lock ? "On  (stick does not tilt the view)" : "Off  (free camera)", ImVec2(0.f, 0.f))) CamHookSetHorizonLock(!lock);
+        if (lock) ImGui::PopStyleColor();
+    }
     ImGui::Spacing();
 
     // HUD
@@ -312,6 +321,7 @@ void BuildUi() {
         WorldScaleSet(1.f);
         XrSetPoseLag(2);
         CamHookSetScaleHead(true);
+        CamHookSetHorizonLock(false);
         SetAdvancedShown(false);
         SetDevKeys(false);
         Log("menu: settings reset to defaults");
