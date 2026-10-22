@@ -48,8 +48,8 @@ bool IsSetUp() {
     const std::wstring dir = ds3vr::ModuleDir();
     g_setupState = 0;
     if (GetFileAttributesW((dir + L"d3d11.dll").c_str()) == INVALID_FILE_ATTRIBUTES) {
-        g_setupProblem = L"Helifax's Dark Souls 3 geo-11 fix is not installed in this Game folder (d3d11.dll is missing).\n\n"
-                         L"Install it as described in ds3vr\\README.txt, then run install-ds3vr.bat.";
+        g_setupProblem = L"DS3 VR has not been set up yet: Helifax's Dark Souls 3 geo-11 fix is not in this Game folder.\n\n"
+                         L"Close the game and run install-ds3vr.bat (in the Game folder). It downloads and sets up the fix for you.";
         return false;
     }
     HANDLE f = CreateFileW((dir + L"d3dxdm.ini").c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);

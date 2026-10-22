@@ -13,39 +13,26 @@ WHAT YOU NEED
 -------------
 - DARK SOULS III on Steam (the current version, 1.15.2)
 - A PC VR headset with an OpenXR runtime set as the active one: SteamVR, Virtual Desktop (VDXR),
-  Meta Quest Link or PimaxXR. Tested with SteamVR.
+  Meta Quest Link or PimaxXR. Thoroughly tested on SteamVR; the others should work but have not been
+  fully tested yet.
 - A gamepad (Xbox, or others through Steam Input)
-- Helifax's Dark Souls 3 geo-11 fix (step 1)
+- Helifax's Dark Souls 3 geo-11 fix: the install step downloads it for you (see step 2)
 
 
-STEP 1: HELIFAX'S GEO-11 FIX (USUALLY AUTOMATIC)
-------------------------------------------------
-DS3 VR is built on Helifax's fix and the geo-11 3D driver. Their licences do not allow anyone else to
-pass their files on, so they cannot be in the DS3 VR download. You normally do not need to do
-anything here: in step 3, install-ds3vr.bat offers to download the fix from masterotaku's server
-(the one Helifax's page links to), checks that it is the geo-11 version, and unpacks it.
-
-If that download does not work, get it yourself:
-1. Open https://helixmod.blogspot.com/2016/04/dark-souls-3-3d-vision-fix.html
-2. Download Dark_Souls_3_geo11_fix.7z (the geo-11 version, not the 3D Vision one).
-3. Put it in the game's Game folder (the folder with DarkSoulsIII.exe), or leave it in your
-   Downloads folder, and run install-ds3vr.bat again. You do not need to extract it.
+STEP 1: EXTRACT DS3 VR
+----------------------
+Extract the whole DS3 VR zip into the game's Game folder, the folder with DarkSoulsIII.exe.
+You get dinput8.dll, install-ds3vr.bat, uninstall-ds3vr.bat and a ds3vr folder next to it.
 
 Game folder example: C:\Program Files (x86)\Steam\steamapps\common\DARK SOULS III\Game
 
 
-STEP 2: EXTRACT DS3 VR
-----------------------
-Extract the whole DS3 VR zip into the same Game folder. You get dinput8.dll, install-ds3vr.bat,
-uninstall-ds3vr.bat and a ds3vr folder next to DarkSoulsIII.exe.
-
-
-STEP 3: RUN install-ds3vr.bat
+STEP 2: RUN install-ds3vr.bat
 -----------------------------
 Double-click install-ds3vr.bat in the Game folder (Windows may ask whether to run a downloaded file:
-choose Run). This step exists only because geo-11 and Helifax's fix cannot be included in the DS3 VR
-download. It:
-- downloads Helifax's fix if it is not there yet (it asks first), checks it, and unpacks it
+choose Run). It:
+- downloads Helifax's Dark Souls 3 geo-11 fix (it asks first), checks that it is the geo-11 version,
+  and unpacks it
 - backs up every file it changes into Game\ds3vr_backup
 - switches geo-11 to VR output and adds a few lines to five of the fix's shaders (HUD, lock-on
   marker and sun rays)
@@ -54,6 +41,17 @@ download. It:
 Every change is checked before anything is written. If something does not fit, nothing is changed.
 
 If you start the game before running it, DS3 VR stays off and tells you to run it.
+
+Why this step exists: DS3 VR is built on Helifax's fix and the geo-11 3D driver. Their licences do
+not allow anyone else to pass their files on, so they cannot be in the DS3 VR download. The install
+step fetches them from their official host (masterotaku's server, linked from Helifax's page) and
+adapts that copy for VR.
+
+If the automatic download does not work:
+1. Open https://helixmod.blogspot.com/2016/04/dark-souls-3-3d-vision-fix.html
+2. Download Dark_Souls_3_geo11_fix.7z (the geo-11 version, not the 3D Vision one).
+3. Put it in the Game folder or your Downloads folder (no need to extract it) and run
+   install-ds3vr.bat again.
 
 
 PLAY
@@ -74,7 +72,8 @@ CONTROLS
   Recenter ............ your runtime's recenter, the menu, or F8
   HUD size / mode ..... the menu, or F6 / F7
 
-The VR menu has world scale (1.0 life size to 5.0), HUD mode, size, distance and height, the
+The VR menu has world scale (1.0 life size to 5.0), horizon lock (when on, the right stick no longer
+tilts the view up or down; off by default), HUD mode, size, distance and height, the
 resolution readout, advanced settings (pose lag and head movement), developer keys, recenter and
 reset to defaults. Every change is saved straight away.
 

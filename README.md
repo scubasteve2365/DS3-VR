@@ -16,10 +16,10 @@ marker in 3D, and an in-headset menu.
 | | |
 |---|---|
 | Game | DARK SOULS III on Steam, version 1.15.2 (the current Steam version) |
-| VR runtime | Any OpenXR runtime set as the active one: SteamVR, Virtual Desktop (VDXR), Meta Quest Link, PimaxXR. Tested with SteamVR. |
+| VR runtime | An OpenXR runtime set as the active one. Thoroughly tested on SteamVR; Virtual Desktop (VDXR), Meta Quest Link and PimaxXR should work but have not been fully tested yet. |
 | Headset | Any PC VR headset that runs on that runtime |
 | Gamepad | Xbox, or others through Steam Input |
-| Helifax's geo-11 fix | [Dark Souls 3 geo-11 fix](https://helixmod.blogspot.com/2016/04/dark-souls-3-3d-vision-fix.html) by Helifax and masterotaku (21 October 2023 version). It includes the geo-11 3D driver. |
+| Helifax's geo-11 fix | [Dark Souls 3 geo-11 fix](https://helixmod.blogspot.com/2016/04/dark-souls-3-3d-vision-fix.html) by Helifax and masterotaku (21 October 2023 version), which includes the geo-11 3D driver. You do not download it yourself: the install step fetches it from its official host. |
 
 ## Install
 
@@ -49,7 +49,8 @@ kept. To uninstall, run `uninstall-ds3vr.bat`: it restores every file it changed
 | Recenter | Your runtime's recenter, or the menu | F8 |
 | HUD size / HUD mode | The menu | F6 / F7 |
 
-The VR menu has world scale (1.0 life size to 5.0), HUD mode (fixed, follows your head, hidden),
+The VR menu has world scale (1.0 life size to 5.0), horizon lock (when on, the right stick no
+longer tilts the view up or down; off by default), HUD mode (fixed, follows your head, hidden),
 HUD size, distance and height, the resolution readout below, advanced settings (pose lag and head
 movement, hidden until shown), developer keys, recenter and reset to defaults. Every change is saved
 straight away.
