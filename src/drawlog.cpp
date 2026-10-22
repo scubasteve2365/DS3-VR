@@ -1,4 +1,7 @@
 #include "drawlog.h"
+#include "xr.h"
+
+#include <cmath>
 
 #include <windows.h>
 #include <d3d11.h>
@@ -209,11 +212,105 @@ void DrawState(ID3D11DeviceContext* c) {
     g_buf += "\n";
 }
 
+// ---------- geo-11's stereo separation, read from its StereoParams texture ----------
+// geo-11 (3Dmigoto) binds a small float4 texture in slot 125 for its shaders: x = this eye's final
+// separation (+/-), y = convergence, z = eye (-1/+1). |x| is how far geo-11 slides each eye's image at
+// infinity, which the views sent to the headset must cancel. It depends on the PC (geo-11 works it out
+// from the monitor's physical size), so it is read here rather than assumed. Copy one texel, then read
+// it a few frames later without waiting, so the game never stalls; repeat every few seconds.
+ID3D11Texture2D* g_probeStaging = nullptr;
+bool g_probePending = false;
+ULONGLONG g_probeAt = 0;        // when to do the next step
+ULONGLONG g_probeStartMs = 0;   // first attempt (for the "could not read" note)
+bool g_probeEverRead = false, g_probeWarned = false;
+
+void StereoProbe(ID3D11DeviceContext* c) {
+    const ULONGLONG now = GetTickCount64();
+    if (now < g_probeAt) return;
+    if (!g_probeStartMs) g_probeStartMs = now;
+    if (g_probePending) {
+        D3D11_MAPPED_SUBRESOURCE m{};
+        const HRESULT hr = c->Map(g_probeStaging, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m);
+        if (hr == DXGI_ERROR_WAS_STILL_DRAWING) return;
+        g_probePending = false;
+        g_probeAt = now + 5000;
+        if (FAILED(hr)) return;
+        const float* f = static_cast<const float*>(m.pData);
+        const float sep = f[0], conv = f[1], eye = f[2];
+        c->Unmap(g_probeStaging, 0);
+        if (std::fabs(sep) > 0.0005f && std::fabs(sep) < 0.3f) {
+            XrSetMeasuredShift(std::fabs(sep), conv, eye);
+            g_probeEverRead = true;
+        }
+        return;
+    }
+    ID3D11ShaderResourceView* srv = nullptr;
+    c->VSGetShaderResources(125, 1, &srv);
+    if (!srv) c->PSGetShaderResources(125, 1, &srv);
+    if (!srv) {
+        if (!g_probeEverRead && !g_probeWarned && now - g_probeStartMs > 120000) {
+            g_probeWarned = true;
+            Log("STEREO: could not read geo-11's separation (no StereoParams texture seen); using the default shift");
+        }
+        g_probeAt = now + 250;
+        return;
+    }
+    ID3D11Resource* r = nullptr;
+    srv->GetResource(&r);
+    srv->Release();
+    ID3D11Texture2D* t = nullptr;
+    if (r) r->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&t));
+    if (r) r->Release();
+    if (!t) {
+        g_probeAt = now + 1000;
+        return;
+    }
+    D3D11_TEXTURE2D_DESC d{};
+    t->GetDesc(&d);
+    if (d.Format != DXGI_FORMAT_R32G32B32A32_FLOAT || d.SampleDesc.Count != 1) {
+        if (!g_probeWarned) {
+            g_probeWarned = true;
+            Log("STEREO: could not read geo-11's separation (StereoParams format %d); using the default shift", static_cast<int>(d.Format));
+        }
+        t->Release();
+        g_probeAt = now + 60000;
+        return;
+    }
+    if (!g_probeStaging) {
+        ID3D11Device* dev = nullptr;
+        c->GetDevice(&dev);
+        D3D11_TEXTURE2D_DESC sd{};
+        sd.Width = 1;
+        sd.Height = 1;
+        sd.MipLevels = 1;
+        sd.ArraySize = 1;
+        sd.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        sd.SampleDesc.Count = 1;
+        sd.Usage = D3D11_USAGE_STAGING;
+        sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (dev) {
+            dev->CreateTexture2D(&sd, nullptr, &g_probeStaging);
+            dev->Release();
+        }
+        if (!g_probeStaging) {
+            t->Release();
+            g_probeAt = now + 60000;
+            return;
+        }
+    }
+    const D3D11_BOX box{0, 0, 0, 1, 1, 1};
+    c->CopySubresourceRegion(g_probeStaging, 0, 0, 0, 0, t, 0, &box);
+    t->Release();
+    g_probePending = true;
+    g_probeAt = now + 50;  // read it back a few frames later
+}
+
 void STDMETHODCALLTYPE DrawIndexedDetour(ID3D11DeviceContext* c, UINT n, UINT start, INT base) {
     if (Recording(c)) {
         Add("%u DrawIndexed %u start %u base %d", ++g_seq, n, start, base);
         DrawState(c);
     }
+    if (c == g_ctx) StereoProbe(c);
     if (c == g_ctx && !HudBeforeDraw(c, n, true))
         return;
     o_DrawIndexed(c, n, start, base);
@@ -223,6 +320,7 @@ void STDMETHODCALLTYPE DrawDetour(ID3D11DeviceContext* c, UINT n, UINT start) {
         Add("%u Draw %u start %u", ++g_seq, n, start);
         DrawState(c);
     }
+    if (c == g_ctx) StereoProbe(c);
     if (c == g_ctx && !HudBeforeDraw(c, n, false))
         return;
     o_Draw(c, n, start);
@@ -232,6 +330,7 @@ void STDMETHODCALLTYPE DrawIndexedInstancedDetour(ID3D11DeviceContext* c, UINT n
         Add("%u DrawIndexedInstanced %u x%u start %u base %d si %u", ++g_seq, n, inst, start, base, si);
         DrawState(c);
     }
+    if (c == g_ctx) StereoProbe(c);
     if (c == g_ctx && !HudBeforeDraw(c, n, true))
         return;
     o_DrawIndexedInstanced(c, n, inst, start, base, si);
@@ -241,6 +340,7 @@ void STDMETHODCALLTYPE DrawInstancedDetour(ID3D11DeviceContext* c, UINT n, UINT 
         Add("%u DrawInstanced %u x%u start %u si %u", ++g_seq, n, inst, start, si);
         DrawState(c);
     }
+    if (c == g_ctx) StereoProbe(c);
     if (c == g_ctx && !HudBeforeDraw(c, n, false))
         return;
     o_DrawInstanced(c, n, inst, start, si);

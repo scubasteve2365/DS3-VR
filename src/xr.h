@@ -11,6 +11,8 @@ namespace ds3vr {
 // Call from the game's render thread (Present) every frame.
 void XrOnPresent(ID3D11Device* device, IDXGISwapChain* sc);
 
+// geo-11's measured per-eye separation (from its StereoParams texture); replaces the default shift.
+void XrSetMeasuredShift(float s, float convergence, float eye);
 int XrGetPoseLag();                // camera updates between a head pose and its frame reaching the headset
 void XrSetPoseLag(int lag);        // from the menu (developer section): applied now and saved
 void XrRecenter();                 // F8

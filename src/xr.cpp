@@ -46,6 +46,7 @@ constexpr float kR2D = 57.29578f;
 // ---------------------------------------------------------------------------------------------
 std::atomic<int> g_poseLag{2};
 float g_worldScale = 1.f;
+bool g_shiftOverride = false;            // ds3vr.ini StereoShiftOverride: keep it, ignore geo-11's reading
 std::atomic<float> g_shift{0.f};      // geo-11's per-eye image shift at infinity, in NDC (2 = full width)
 std::atomic<bool> g_swapEyes{false};
 int g_aspectMode = 1;                 // ds3vr.ini RenderAspect: 1 = headset shape, 0 = the game's 16:9
@@ -73,15 +74,18 @@ void ReadSettings() {
     g_aspectMode = GetPrivateProfileIntW(L"ds3vr", L"HeadsetAspect", 1, ini.c_str());
     g_leftHalf = GetPrivateProfileIntW(L"ds3vr", L"LeftEyeHalf", 1, ini.c_str()) ? 1 : 0;
     // geo-11 slides each eye's image sideways by a fixed amount, which the views we send to the headset
-    // cancel. It depends only on geo-11's separation, which DS3 VR resets to 20 every launch, where it
-    // was measured as 0.0187. So it is not read from ds3vr.ini any more (a 0 or a typo there gave a
-    // doubled picture); StereoShiftOverride (non-zero) is only for testing.
+    // cancel. geo-11 works it out per PC (from the monitor's physical size), so once the game draws, the
+    // real value is read from geo-11's StereoParams texture (drawlog.cpp, XrSetMeasuredShift). Until then
+    // 0.0187 is used: the value on the PC DS3 VR was developed on, at geo-11 separation 20 (which the mod
+    // resets every launch). Not read from ds3vr.ini any more (a 0 or a typo there gave a doubled
+    // picture); StereoShiftOverride (non-zero) is only for testing.
     constexpr float kStereoShiftSep20 = 0.0187f;
     float s = kStereoShiftSep20;
     GetPrivateProfileStringW(L"ds3vr", L"StereoShiftOverride", L"0", v, 32, ini.c_str());
     const float over = static_cast<float>(_wtof(v));
     if (over > 0.001f && over < 0.5f) {
         s = over;
+        g_shiftOverride = true;
         Log("settings: StereoShiftOverride %.4f in ds3vr.ini replaces the calculated %.4f", over, kStereoShiftSep20);
     }
     GetPrivateProfileStringW(L"ds3vr", L"StereoShift", L"", v, 32, ini.c_str());
@@ -1143,6 +1147,25 @@ bool XrEyeImageSize(unsigned* w, unsigned* h) {
     *w = g_kDesc.Width / 2;
     *h = g_kDesc.Height;
     return true;
+}
+
+void XrSetMeasuredShift(float s, float convergence, float eye) {
+    static bool first = true;
+    const float cur = g_shift.load();
+    static float lastLogged = -1.f;
+    if (!first && std::fabs(s - lastLogged) < 0.0002f) return;
+    lastLogged = s;
+    if (g_shiftOverride) {
+        if (first) Log("STEREO: geo-11's separation reads %.4f; StereoShiftOverride %.4f in ds3vr.ini is used instead", s, cur);
+        first = false;
+        return;
+    }
+    // Check build: the reading is logged next to the value in use, but not applied yet.
+    constexpr bool kApplyMeasuredShift = false;
+    Log("STEREO: geo-11's separation reads %.4f (convergence %.3f, eye %+.0f); the mod is using %.4f%s", s, convergence, eye, cur,
+        kApplyMeasuredShift ? ", switching to the reading" : " (check build: reading not applied yet)");
+    first = false;
+    if (kApplyMeasuredShift) g_shift.store(s);
 }
 
 int XrGetPoseLag() { return g_poseLag.load(); }
