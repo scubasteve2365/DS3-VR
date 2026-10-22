@@ -562,7 +562,7 @@ int wmain(int argc, wchar_t** argv) {
     SetConsoleOutputCP(CP_UTF8);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     const std::wstring verb = argc > 1 ? argv[1] : L"";
-    if (argc < 3 || (verb != L"install" && verb != L"uninstall")) {
+    if (argc < 3 || (verb != L"install" && verb != L"uninstall" && verb != L"check-download")) {
         Say("DS3 VR " DS3VR_VERSION ": run install-ds3vr.bat or uninstall-ds3vr.bat in the game's Game folder.");
         return 2;
     }
@@ -580,6 +580,12 @@ int wmain(int argc, wchar_t** argv) {
     }
     Say("Game folder: " + Narrow(game));
     Say("");
+    if (verb == L"check-download") {
+        // Testing aid: download and check Helifax's fix only (ignores any copy already on the PC).
+        const bool ok = DownloadFix(game);
+        Say(ok ? "Download check passed." : "Download check failed: no usable geo-11 fix was downloaded.");
+        return ok ? 0 : 1;
+    }
     if (verb == L"install") {
         Say("Why this step: DS3 VR needs geo-11 and Helifax's Dark Souls 3 fix, which cannot be included in");
         Say("the DS3 VR download. This step adapts the copy you downloaded for VR. Every file it changes is");
