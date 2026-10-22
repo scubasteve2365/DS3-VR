@@ -1,0 +1,507 @@
+// DS3VR-Setup.exe: installs / uninstalls DS3 VR on top of Helifax's Dark Souls 3 geo-11 fix.
+// Finds the game through Steam, checks the fix, backs up every file it changes, applies the DS3 VR
+// patches (all checked in memory first, nothing written if any fails), copies the mod files.
+
+#include <windows.h>
+#include <bcrypt.h>
+#include <shlobj.h>
+#include <knownfolders.h>
+
+#include <cstdio>
+#include <cstring>
+#include <iostream>
+#include <string>
+#include <vector>
+
+#include "../src/version.h"
+#include "patch.h"
+#include "sevenzip.h"
+#include "shader_inserts.h"
+
+using namespace setup;
+
+namespace {
+
+// Helifax's fix as tested with this release (21 Oct 2023 update): geo-11's d3d11.dll.
+const char* kTestedGeo11Sha256 = "50bb7df2414920f6950d6d15519974a98be3865da17727ec58e14a3a0f03e62f";
+const wchar_t* kBackupDir = L"ds3vr_backup";
+// Files the installer changes (relative to Game). The shaders come from shader_inserts.h.
+std::vector<std::wstring> ChangedFiles() {
+    std::vector<std::wstring> v = {L"d3dx.ini", L"d3dxdm.ini"};
+    for (const ShaderInsert& s : kShaderInserts) {
+        bool have = false;
+        for (auto& f : v) have |= f == s.file;
+        if (!have) v.push_back(s.file);
+    }
+    return v;
+}
+
+void Say(const std::string& s) { std::cout << s << std::endl; }
+
+std::string Narrow(const std::wstring& w) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string s(n > 0 ? n - 1 : 0, '\0');
+    if (n > 1) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, &s[0], n, nullptr, nullptr);
+    return s;
+}
+std::wstring Widen(const std::string& s) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    std::wstring w(n > 0 ? n - 1 : 0, L'\0');
+    if (n > 1) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], n);
+    return w;
+}
+
+bool Exists(const std::wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
+
+bool ReadFileAll(const std::wstring& p, std::string& out) {
+    FILE* f = _wfopen(p.c_str(), L"rb");
+    if (!f) return false;
+    out.clear();
+    char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
+    fclose(f);
+    return true;
+}
+
+bool WriteFileAll(const std::wstring& p, const std::string& data) {
+    FILE* f = _wfopen(p.c_str(), L"wb");
+    if (!f) return false;
+    const bool ok = fwrite(data.data(), 1, data.size(), f) == data.size();
+    return fclose(f) == 0 && ok;
+}
+
+std::string Sha256(const std::wstring& path) {
+    std::string data;
+    if (!ReadFileAll(path, data)) return "";
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE h = nullptr;
+    unsigned char digest[32] = {};
+    std::string hex;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) == 0) {
+        if (BCryptCreateHash(alg, &h, nullptr, 0, nullptr, 0, 0) == 0) {
+            BCryptHashData(h, reinterpret_cast<PUCHAR>(&data[0]), static_cast<ULONG>(data.size()), 0);
+            BCryptFinishHash(h, digest, sizeof(digest), 0);
+            BCryptDestroyHash(h);
+            char b[3];
+            for (unsigned char c : digest) {
+                snprintf(b, sizeof(b), "%02x", c);
+                hex += b;
+            }
+        }
+        BCryptCloseAlgorithmProvider(alg, 0);
+    }
+    return hex;
+}
+
+// ---------- finding the game ----------
+std::wstring ReadSteamPath() {
+    wchar_t buf[MAX_PATH] = {};
+    DWORD size = sizeof(buf);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath", RRF_RT_REG_SZ, nullptr, buf, &size) == ERROR_SUCCESS)
+        return buf;
+    size = sizeof(buf);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\WOW6432Node\\Valve\\Steam", L"InstallPath", RRF_RT_REG_SZ, nullptr, buf, &size) ==
+        ERROR_SUCCESS)
+        return buf;
+    return L"";
+}
+
+std::wstring FindGameFolder() {
+    const std::wstring steam = ReadSteamPath();
+    if (steam.empty()) return L"";
+    std::vector<std::wstring> libs = {steam};
+    std::string vdf;
+    if (ReadFileAll(steam + L"\\steamapps\\libraryfolders.vdf", vdf)) {
+        size_t p = 0;
+        while ((p = vdf.find("\"path\"", p)) != std::string::npos) {
+            const size_t a = vdf.find('"', p + 6);
+            const size_t b = a == std::string::npos ? a : vdf.find('"', a + 1);
+            if (b == std::string::npos) break;
+            std::string path = vdf.substr(a + 1, b - a - 1);
+            std::string clean;
+            for (size_t i = 0; i < path.size(); ++i) {
+                if (path[i] == '\\' && i + 1 < path.size() && path[i + 1] == '\\') ++i;
+                clean += path[i];
+            }
+            libs.push_back(Widen(clean));
+            p = b + 1;
+        }
+    }
+    for (auto& lib : libs) {
+        std::wstring g = lib + L"\\steamapps\\common\\DARK SOULS III\\Game";
+        for (auto& c : g)
+            if (c == L'/') c = L'\\';
+        if (Exists(g + L"\\DarkSoulsIII.exe")) return g;
+    }
+    return L"";
+}
+
+std::wstring BrowseForGame() {
+    Say("Please pick the folder that contains DarkSoulsIII.exe (DARK SOULS III\\Game).");
+    BROWSEINFOW bi{};
+    bi.lpszTitle = L"Select the DARK SOULS III \\Game folder (the one with DarkSoulsIII.exe)";
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    PIDLIST_ABSOLUTE id = SHBrowseForFolderW(&bi);
+    if (!id) return L"";
+    wchar_t path[MAX_PATH] = {};
+    SHGetPathFromIDListW(id, path);
+    CoTaskMemFree(id);
+    std::wstring g = path;
+    if (Exists(g + L"\\Game\\DarkSoulsIII.exe")) g += L"\\Game";
+    return Exists(g + L"\\DarkSoulsIII.exe") ? g : L"";
+}
+
+// ---------- helpers ----------
+bool AskYes(const std::string& q, bool def) {
+    std::cout << q << (def ? " [Y/n] " : " [y/N] ") << std::flush;
+    std::string a;
+    std::getline(std::cin, a);
+    if (a.empty()) return def;
+    return a[0] == 'y' || a[0] == 'Y';
+}
+
+std::wstring SetupDir() {
+    wchar_t p[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, p, MAX_PATH);
+    std::wstring s = p;
+    return s.substr(0, s.find_last_of(L"\\/"));
+}
+
+bool IsOurDll(const std::wstring& path) {
+    std::string d;
+    return ReadFileAll(path, d) && d.find("ds3vr milestone") != std::string::npos;
+}
+
+void MakeDirs(const std::wstring& path) {
+    size_t p = 0;
+    while ((p = path.find(L'\\', p + 1)) != std::wstring::npos) CreateDirectoryW(path.substr(0, p).c_str(), nullptr);
+    CreateDirectoryW(path.c_str(), nullptr);
+}
+
+// ---------- the game's own graphics settings (%APPDATA%\\DarkSoulsIII\\GraphicsConfig.xml, UTF-16) ----------
+std::wstring GraphicsConfigPath() {
+    PWSTR p = nullptr;
+    std::wstring d;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &p))) d = p;
+    if (p) CoTaskMemFree(p);
+    return d.empty() ? d : d + L"\\DarkSoulsIII\\GraphicsConfig.xml";
+}
+
+// UTF-16LE bytes (with or without BOM) to UTF-8; remembers the BOM.
+bool Utf16ToUtf8(const std::string& raw, std::string& out, bool& bom) {
+    bom = raw.size() >= 2 && static_cast<unsigned char>(raw[0]) == 0xFF && static_cast<unsigned char>(raw[1]) == 0xFE;
+    const size_t start = bom ? 2 : 0;
+    if ((raw.size() - start) % 2) return false;
+    std::wstring w((raw.size() - start) / 2, L'\0');
+    if (!w.empty()) memcpy(&w[0], raw.data() + start, w.size() * 2);
+    out = Narrow(w);
+    return true;
+}
+std::string Utf8ToUtf16(const std::string& s, bool bom) {
+    const std::wstring w = Widen(s);
+    std::string out = bom ? std::string("\xFF\xFE") : std::string();
+    out.append(reinterpret_cast<const char*>(w.data()), w.size() * 2);
+    return out;
+}
+
+// ---------- uninstall ----------
+bool Uninstall(const std::wstring& game, bool askSettings) {
+    const std::wstring bdir = game + L"\\" + kBackupDir;
+    if (!Exists(bdir)) {
+        Say("No DS3 VR backup found in this folder, so there is nothing to restore.");
+        return false;
+    }
+    int restored = 0, failed = 0;
+    for (auto& rel : ChangedFiles()) {
+        const std::wstring b = bdir + L"\\" + rel, g = game + L"\\" + rel;
+        if (!Exists(b)) continue;
+        if (CopyFileW(b.c_str(), g.c_str(), FALSE)) ++restored;
+        else ++failed;
+        // geo-11 keeps a compiled copy of each shader (.bin); restore it too so it matches.
+        const std::wstring bb = b.substr(0, b.size() - 4) + L".bin", gb = g.substr(0, g.size() - 4) + L".bin";
+        if (rel.size() > 4 && rel.substr(rel.size() - 4) == L".txt" && Exists(bb)) CopyFileW(bb.c_str(), gb.c_str(), FALSE);
+    }
+    const std::wstring dll = game + L"\\dinput8.dll";
+    if (Exists(bdir + L"\\dinput8.dll")) CopyFileW((bdir + L"\\dinput8.dll").c_str(), dll.c_str(), FALSE);
+    else if (IsOurDll(dll)) DeleteFileW(dll.c_str());
+    if (failed) {
+        Say("Could not restore " + std::to_string(failed) + " file(s). Close the game and run Uninstall again.");
+        return false;
+    }
+    const std::wstring gfx = GraphicsConfigPath(), gfxBackup = bdir + L"\\GraphicsConfig.xml";
+    if (!gfx.empty() && Exists(gfxBackup)) {
+        if (!askSettings || AskYes("Put the game's graphics settings back to how they were before DS3 VR?", true))
+            CopyFileW(gfxBackup.c_str(), gfx.c_str(), FALSE);
+        DeleteFileW(gfxBackup.c_str());
+    }
+    bool keep = askSettings ? AskYes("Keep your DS3 VR settings (ds3vr.ini) for next time?", true) : true;
+    if (!keep) DeleteFileW((game + L"\\ds3vr.ini").c_str());
+    DeleteFileW((game + L"\\ds3vr.log").c_str());
+    DeleteFileW((game + L"\\ds3vr_prev.log").c_str());
+    WIN32_FIND_DATAW fd;
+    for (const wchar_t* pat : {L"\\ds3vr_snap_*.bmp", L"\\ds3vr_draws_*.txt"}) {
+        HANDLE h = FindFirstFileW((game + pat).c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do DeleteFileW((game + L"\\" + fd.cFileName).c_str());
+        while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    // Remove the backup folder (files first, then the directories).
+    for (auto& rel : ChangedFiles()) {
+        DeleteFileW((bdir + L"\\" + rel).c_str());
+        if (rel.size() > 4) DeleteFileW((bdir + L"\\" + rel.substr(0, rel.size() - 4) + L".bin").c_str());
+    }
+    DeleteFileW((bdir + L"\\dinput8.dll").c_str());
+    RemoveDirectoryW((bdir + L"\\ShaderFixesDM").c_str());
+    RemoveDirectoryW(bdir.c_str());
+    Say("Restored " + std::to_string(restored) + " file(s). DS3 VR is uninstalled; Helifax's fix is back to how it was.");
+    return true;
+}
+
+// ---------- Helifax's fix: find and unpack the archive if needed ----------
+const wchar_t* kFixFiles[] = {L"d3d11.dll", L"d3dx.ini", L"d3dxdm.ini"};
+const wchar_t* kOuterName = L"Dark_Souls_3_geo11_fix.7z";
+const wchar_t* kInnerName = L"FixFiles.7z";
+
+std::wstring MissingFixFile(const std::wstring& game) {
+    for (const wchar_t* f : kFixFiles)
+        if (!Exists(game + L"\\" + f)) return f;
+    return L"";
+}
+
+std::wstring DownloadsDir() {
+    PWSTR p = nullptr;
+    std::wstring d;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Downloads, 0, nullptr, &p))) d = p;
+    if (p) CoTaskMemFree(p);
+    return d;
+}
+
+std::wstring FirstExisting(const std::vector<std::wstring>& dirs, const wchar_t* name) {
+    for (auto& d : dirs)
+        if (!d.empty() && Exists(d + L"\\" + name)) return d + L"\\" + name;
+    return L"";
+}
+
+bool Unpack(const std::wstring& archive, const std::wstring& dest) {
+    Say("Extracting " + Narrow(archive) + " ...");
+    std::string err;
+    int n = 0;
+    if (!Extract7z(archive, dest, err, &n)) {
+        Say("Could not extract it: " + err + ".");
+        Say("Close the game if it is running, or extract the archive yourself with 7-Zip, then run setup again.");
+        return false;
+    }
+    Say("  " + std::to_string(n) + " file(s) extracted.");
+    return true;
+}
+
+// Helifax's download is a 7z (Dark_Souls_3_geo11_fix.7z) that holds a second 7z (FixFiles.7z)
+// plus LICENSE.txt. The fix itself is inside FixFiles.7z. Handle either one being found.
+bool EnsureFix(const std::wstring& game) {
+    std::wstring missing = MissingFixFile(game);
+    if (missing.empty()) return true;
+    const std::wstring parent = game.substr(0, game.find_last_of(L'\\'));
+    const std::wstring sub = game + L"\\Dark_Souls_3_geo11_fix";
+    std::wstring inner = FirstExisting({game, sub}, kInnerName);
+    std::wstring outer = inner.empty() ? FirstExisting({game, parent, SetupDir(), DownloadsDir()}, kOuterName) : L"";
+    if (inner.empty() && outer.empty()) {
+        Say("Helifax's Dark Souls 3 geo-11 fix is not installed (" + Narrow(missing) + " is missing).");
+        Say("Download Dark_Souls_3_geo11_fix.7z from https://helixmod.blogspot.com/2016/04/dark-souls-3-3d-vision-fix.html");
+        Say("and put it in the Game folder or your Downloads folder, then run this setup again.");
+        Say("Setup will unpack it for you.");
+        return false;
+    }
+    Say("Helifax's geo-11 fix is downloaded but not unpacked yet:");
+    Say("  " + Narrow(inner.empty() ? outer : inner));
+    if (!inner.empty()) Say("(FixFiles.7z is the archive inside Helifax's download that holds the actual fix.)");
+    if (!AskYes("Unpack it into the Game folder now?", true)) {
+        Say("Then extract FixFiles.7z into the Game folder yourself and run this setup again.");
+        return false;
+    }
+    if (inner.empty()) {
+        // The outer archive holds FixFiles.7z and LICENSE.txt; put both in the Game folder.
+        if (!Unpack(outer, game)) return false;
+        inner = game + L"\\" + kInnerName;
+        if (!Exists(inner)) {
+            Say("That archive did not contain FixFiles.7z, so it is not the Helifax fix this setup expects.");
+            return false;
+        }
+    }
+    if (!Unpack(inner, game)) return false;
+    missing = MissingFixFile(game);
+    if (!missing.empty()) {
+        Say("The fix was unpacked but " + Narrow(missing) + " is still missing. Please check the download.");
+        return false;
+    }
+    Say("Helifax's fix is unpacked.");
+    return true;
+}
+
+// ---------- install ----------
+bool Install(const std::wstring& game) {
+    const std::wstring files = SetupDir() + L"\\files";
+    if (!Exists(files + L"\\dinput8.dll")) {
+        Say("The 'files' folder next to DS3VR-Setup.exe is missing. Extract the whole zip, then run setup again.");
+        return false;
+    }
+    // 1. Helifax's fix present? If not, look for its archive and offer to unpack it.
+    if (!EnsureFix(game)) return false;
+    const std::string sha = Sha256(game + L"\\d3d11.dll");
+    if (sha != kTestedGeo11Sha256) {
+        Say("Your geo-11 (d3d11.dll) is a different build from the one DS3 VR " DS3VR_VERSION " was tested with.");
+        Say("It may still work. The patches are checked one by one and nothing is changed if any of them do not fit.");
+        if (!AskYes("Continue anyway?", false)) return false;
+    }
+    // 2. Already installed? Start again from the originals.
+    const std::wstring bdir = game + L"\\" + kBackupDir;
+    if (Exists(bdir)) {
+        Say("DS3 VR is already installed here. Reinstalling: restoring the original files first.");
+        if (!Uninstall(game, false)) return false;
+    }
+    // 3. Prepare every change in memory.
+    struct Pending {
+        std::wstring rel;
+        TextFile text;
+    };
+    std::vector<Pending> pend;
+    std::vector<std::string> problems;
+    for (auto& rel : ChangedFiles()) {
+        std::string raw;
+        if (!ReadFileAll(game + L"\\" + rel, raw)) {
+            problems.push_back(Narrow(rel) + " is missing (is Helifax's fix fully extracted?)");
+            continue;
+        }
+        Pending p{rel, {}};
+        p.text.Load(raw);
+        if (rel == L"d3dx.ini" && HasDs3vrMarks(p.text)) {
+            problems.push_back(Narrow(rel) + " already contains DS3 VR changes but there is no backup to start from. "
+                               "Re-extract Helifax's fix over the Game folder, then run setup again.");
+            continue;
+        }
+        if (rel == L"d3dx.ini") PatchD3dx(p.text, problems);
+        else if (rel == L"d3dxdm.ini") PatchD3dxdm(p.text, problems);
+        else
+            for (const ShaderInsert& s : kShaderInserts)
+                if (rel == s.file && !InsertAfterLine(p.text, s.after, s.text))
+                    problems.push_back(Narrow(rel) + ": expected line not found (\"" + s.after + "\")");
+        pend.push_back(std::move(p));
+    }
+    if (!problems.empty()) {
+        Say("Nothing was changed, because:");
+        for (auto& p : problems) Say("  - " + p);
+        return false;
+    }
+    // The game's graphics settings: windowed, no motion blur / depth of field / ambient occlusion / antialiasing.
+    // A convenience, so a problem here never stops the install.
+    const std::wstring gfx = GraphicsConfigPath();
+    std::string gfxOld, gfxNew;
+    bool gfxBom = false, gfxHad = false;
+    if (!gfx.empty()) {
+        std::string raw, xml;
+        if (ReadFileAll(gfx, raw)) {
+            std::vector<std::string> gp;
+            if (Utf16ToUtf8(raw, xml, gfxBom) && PatchGraphicsConfig(xml, gp)) {
+                gfxOld = raw;
+                gfxHad = true;
+                gfxNew = Utf8ToUtf16(xml, gfxBom);
+            } else {
+                Say("Note: could not read the game's graphics settings, so they were left alone. Set them by hand (see README).");
+            }
+        } else {
+            gfxNew = Utf8ToUtf16(DefaultGraphicsConfig(), false);
+        }
+    }
+    // 4. Back up.
+    MakeDirs(bdir + L"\\ShaderFixesDM");
+    for (auto& p : pend) {
+        const std::wstring g = game + L"\\" + p.rel, b = bdir + L"\\" + p.rel;
+        if (!CopyFileW(g.c_str(), b.c_str(), FALSE)) {
+            Say("Could not back up " + Narrow(p.rel) + ". Nothing was changed.");
+            return false;
+        }
+        const std::wstring gb = g.substr(0, g.size() - 4) + L".bin";
+        if (p.rel.size() > 4 && p.rel.substr(p.rel.size() - 4) == L".txt" && Exists(gb))
+            CopyFileW(gb.c_str(), (b.substr(0, b.size() - 4) + L".bin").c_str(), FALSE);
+    }
+    const std::wstring dll = game + L"\\dinput8.dll";
+    if (Exists(dll) && !IsOurDll(dll)) {
+        Say("Note: another mod's dinput8.dll was in the Game folder. It is saved in ds3vr_backup and comes back on uninstall.");
+        CopyFileW(dll.c_str(), (bdir + L"\\dinput8.dll").c_str(), FALSE);
+    }
+    // 5. Write.
+    for (auto& p : pend)
+        if (!WriteFileAll(game + L"\\" + p.rel, p.text.Save())) {
+            Say("Could not write " + Narrow(p.rel) + " (is the game running?). Restoring the originals.");
+            Uninstall(game, false);
+            return false;
+        }
+    if (!CopyFileW((files + L"\\dinput8.dll").c_str(), dll.c_str(), FALSE)) {
+        Say("Could not copy dinput8.dll (is the game running?). Restoring the originals.");
+        Uninstall(game, false);
+        return false;
+    }
+    if (!gfxNew.empty() && gfxNew != gfxOld) {
+        if (gfxHad) WriteFileAll(bdir + L"\\GraphicsConfig.xml", gfxOld);
+        MakeDirs(gfx.substr(0, gfx.find_last_of(L'\\')));
+        if (WriteFileAll(gfx, gfxNew))
+            Say("Set the game's graphics for VR: windowed, motion blur, depth of field, ambient occlusion and antialiasing off.");
+        else
+            Say("Note: could not change the game's graphics settings. Set them by hand (see README).");
+    } else if (gfxHad) {
+        Say("The game's graphics settings are already right for VR.");
+    }
+    const std::wstring ini = game + L"\\ds3vr.ini";
+    if (!Exists(ini)) CopyFileW((files + L"\\ds3vr.ini").c_str(), ini.c_str(), FALSE);
+    else Say("Kept your existing ds3vr.ini settings.");
+    // 6. Verify.
+    int bad = 0;
+    for (auto& p : pend) {
+        std::string raw;
+        if (!ReadFileAll(game + L"\\" + p.rel, raw) || raw != p.text.Save()) ++bad;
+    }
+    if (bad || !IsOurDll(dll)) {
+        Say("Verification failed. Restoring the originals.");
+        Uninstall(game, false);
+        return false;
+    }
+    Say("");
+    Say("Installed DS3 VR " DS3VR_VERSION ".");
+    Say("Start your VR runtime (for example SteamVR), then launch Dark Souls III from Steam as usual.");
+    Say("In game: click both thumbsticks together (or press Insert) for the VR menu.");
+    return true;
+}
+
+} // namespace
+
+int wmain(int argc, wchar_t** argv) {
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleTitleW(L"DS3 VR " DS3VR_VERSION " setup");
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    Say("DS3 VR " DS3VR_VERSION ": Dark Souls III in VR (needs Helifax's Dark Souls 3 geo-11 fix)");
+    Say("");
+    std::wstring game = argc > 1 ? argv[1] : FindGameFolder();
+    if (!game.empty() && !Exists(game + L"\\DarkSoulsIII.exe") && Exists(game + L"\\Game\\DarkSoulsIII.exe")) game += L"\\Game";
+    if (game.empty() || !Exists(game + L"\\DarkSoulsIII.exe")) game = BrowseForGame();
+    if (game.empty()) {
+        Say("Dark Souls III was not found.");
+    } else {
+        Say("Game folder: " + Narrow(game));
+        const bool installed = Exists(game + L"\\" + kBackupDir);
+        Say(installed ? "DS3 VR is installed here." : "DS3 VR is not installed here yet.");
+        Say("");
+        std::cout << (installed ? "[R]einstall, [U]ninstall or [Q]uit? " : "[I]nstall, [U]ninstall or [Q]uit? ") << std::flush;
+        std::string a;
+        std::getline(std::cin, a);
+        const char c = a.empty() ? 'q' : static_cast<char>(tolower(static_cast<unsigned char>(a[0])));
+        Say("");
+        if (c == 'i' || c == 'r') Install(game);
+        else if (c == 'u') Uninstall(game, true);
+    }
+    Say("");
+    std::cout << "Press Enter to close." << std::flush;
+    std::string dummy;
+    std::getline(std::cin, dummy);
+    return 0;
+}

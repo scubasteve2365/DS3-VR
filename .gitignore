@@ -1,0 +1,32 @@
+# Build output
+build/
+*.o
+*.obj
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.lib
+*.exp
+out/
+.vs/
+
+# Release archives (published on the Releases page, not in the repository)
+*.zip
+*.7z
+
+# Files the mod writes in the game folder while testing
+ds3vr.log
+ds3vr_prev.log
+ds3vr_snap_*.bmp
+ds3vr_draws_*.txt
+ds3vr_backup/
+
+# Never commit anything from geo-11 or Helifax's fix (their licences do not allow redistribution)
+d3d11.dll
+d3dx.ini
+d3dxdm.ini
+ShaderFixes/
+ShaderFixesDM/
+ShaderCache/
+ShaderCacheDM/
