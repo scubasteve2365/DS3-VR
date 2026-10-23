@@ -2,6 +2,7 @@
 #include "xr.h"
 
 #include <cmath>
+#include <cstdint>
 
 #include <windows.h>
 #include <d3d11.h>
@@ -223,11 +224,20 @@ bool g_probePending = false;
 ULONGLONG g_probeAt = 0;        // when to do the next step
 ULONGLONG g_probeStartMs = 0;   // first attempt (for the "could not read" note)
 bool g_probeEverRead = false, g_probeWarned = false;
+unsigned g_probeTexW = 1;                       // texels copied (first row, up to 8)
+uint64_t g_probeDraws = 0, g_probeHits = 0;     // diagnostics: draws looked at, draws with slot 125 bound
+int g_probeRawLogs = 0;
+ULONGLONG g_probeStatAt = 0;
 
 void StereoProbe(ID3D11DeviceContext* c) {
     const ULONGLONG now = GetTickCount64();
-    if (now < g_probeAt) return;
     if (!g_probeStartMs) g_probeStartMs = now;
+    if (!g_probeEverRead && now >= g_probeStatAt) {
+        if (g_probeStatAt) Log("STEREO: probe looked at %llu draws in the last 10 s, slot 125 bound in %llu", g_probeDraws, g_probeHits);
+        g_probeDraws = g_probeHits = 0;
+        g_probeStatAt = now + 10000;
+    }
+    if (now < g_probeAt) return;
     if (g_probePending) {
         D3D11_MAPPED_SUBRESOURCE m{};
         const HRESULT hr = c->Map(g_probeStaging, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m);
@@ -237,23 +247,34 @@ void StereoProbe(ID3D11DeviceContext* c) {
         if (FAILED(hr)) return;
         const float* f = static_cast<const float*>(m.pData);
         const float sep = f[0], conv = f[1], eye = f[2];
+        if (g_probeRawLogs < 6) {
+            ++g_probeRawLogs;
+            char b[512];
+            int n = snprintf(b, sizeof(b), "STEREO: StereoParams row 0 (%u texels):", g_probeTexW);
+            for (unsigned i = 0; i < g_probeTexW && n < 480; ++i)
+                n += snprintf(b + n, sizeof(b) - n, " [%.5g %.5g %.5g %.5g]", f[i * 4], f[i * 4 + 1], f[i * 4 + 2], f[i * 4 + 3]);
+            Log("%s", b);
+        }
         c->Unmap(g_probeStaging, 0);
         if (std::fabs(sep) > 0.0005f && std::fabs(sep) < 0.3f) {
             XrSetMeasuredShift(std::fabs(sep), conv, eye);
             g_probeEverRead = true;
+        } else if (g_probeRawLogs <= 6) {
+            Log("STEREO: separation value %.5g is out of range; not used", sep);
         }
         return;
     }
     ID3D11ShaderResourceView* srv = nullptr;
+    ++g_probeDraws;
     c->VSGetShaderResources(125, 1, &srv);
     if (!srv) c->PSGetShaderResources(125, 1, &srv);
+    if (srv) ++g_probeHits;
     if (!srv) {
         if (!g_probeEverRead && !g_probeWarned && now - g_probeStartMs > 120000) {
             g_probeWarned = true;
             Log("STEREO: could not read geo-11's separation (no StereoParams texture seen); using the default shift");
         }
-        g_probeAt = now + 250;
-        return;
+        return;  // look at the next draw
     }
     ID3D11Resource* r = nullptr;
     srv->GetResource(&r);
@@ -267,6 +288,11 @@ void StereoProbe(ID3D11DeviceContext* c) {
     }
     D3D11_TEXTURE2D_DESC d{};
     t->GetDesc(&d);
+    static bool loggedDesc = false;
+    if (!loggedDesc) {
+        loggedDesc = true;
+        Log("STEREO: StereoParams texture found: %ux%u, format %d, usage %d", d.Width, d.Height, static_cast<int>(d.Format), static_cast<int>(d.Usage));
+    }
     if (d.Format != DXGI_FORMAT_R32G32B32A32_FLOAT || d.SampleDesc.Count != 1) {
         if (!g_probeWarned) {
             g_probeWarned = true;
@@ -280,7 +306,8 @@ void StereoProbe(ID3D11DeviceContext* c) {
         ID3D11Device* dev = nullptr;
         c->GetDevice(&dev);
         D3D11_TEXTURE2D_DESC sd{};
-        sd.Width = 1;
+        g_probeTexW = d.Width < 8 ? d.Width : 8;
+        sd.Width = g_probeTexW;
         sd.Height = 1;
         sd.MipLevels = 1;
         sd.ArraySize = 1;
@@ -298,7 +325,7 @@ void StereoProbe(ID3D11DeviceContext* c) {
             return;
         }
     }
-    const D3D11_BOX box{0, 0, 0, 1, 1, 1};
+    const D3D11_BOX box{0, 0, 0, g_probeTexW, 1, 1};
     c->CopySubresourceRegion(g_probeStaging, 0, 0, 0, 0, t, 0, &box);
     t->Release();
     g_probePending = true;
