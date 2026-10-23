@@ -84,12 +84,12 @@ std::string Res(ID3D11Resource* r) {
     r->GetType(&dim);
     if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
         D3D11_TEXTURE2D_DESC d{};
-        static_cast<ID3D11Texture2D*>(r)->GetDesc(&d);
+        { ID3D11Texture2D* q = nullptr; if (SUCCEEDED(r->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&q))) && q) { q->GetDesc(&d); q->Release(); } }
         snprintf(b, sizeof(b), "R%d=[%ux%u f%d a%u m%u s%u b0x%x misc0x%x]", id, d.Width, d.Height, static_cast<int>(d.Format),
                  d.ArraySize, d.MipLevels, d.SampleDesc.Count, d.BindFlags, d.MiscFlags);
     } else if (dim == D3D11_RESOURCE_DIMENSION_BUFFER) {
         D3D11_BUFFER_DESC d{};
-        static_cast<ID3D11Buffer*>(r)->GetDesc(&d);
+        { ID3D11Buffer* q = nullptr; if (SUCCEEDED(r->QueryInterface(__uuidof(ID3D11Buffer), reinterpret_cast<void**>(&q))) && q) { q->GetDesc(&d); q->Release(); } }
         snprintf(b, sizeof(b), "R%d=[buf %u b0x%x]", id, d.ByteWidth, d.BindFlags);
     } else {
         snprintf(b, sizeof(b), "R%d=[dim%d]", id, static_cast<int>(dim));
@@ -219,7 +219,7 @@ void DrawState(ID3D11DeviceContext* c) {
 // infinity, which the views sent to the headset must cancel. It depends on the PC (geo-11 works it out
 // from the monitor's physical size), so it is read here rather than assumed. Copy one texel, then read
 // it a few frames later without waiting, so the game never stalls; repeat every few seconds.
-ID3D11Texture2D* g_probeStaging = nullptr;
+ID3D11Resource* g_probeStaging = nullptr;  // staging copy matching geo-11's resource type
 bool g_probePending = false;
 ULONGLONG g_probeAt = 0;        // when to do the next step
 ULONGLONG g_probeStartMs = 0;   // first attempt (for the "could not read" note)
@@ -276,58 +276,95 @@ void StereoProbe(ID3D11DeviceContext* c) {
         }
         return;  // look at the next draw
     }
+    D3D11_SHADER_RESOURCE_VIEW_DESC vd{};
+    srv->GetDesc(&vd);
     ID3D11Resource* r = nullptr;
     srv->GetResource(&r);
     srv->Release();
-    ID3D11Texture2D* t = nullptr;
-    if (r) r->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&t));
-    if (r) r->Release();
-    if (!t) {
+    if (!r) {
         g_probeAt = now + 1000;
         return;
     }
-    D3D11_TEXTURE2D_DESC d{};
-    t->GetDesc(&d);
+    D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+    r->GetType(&dim);
+    // What kind of resource geo-11 uses for StereoParams: log it once.
+    DXGI_FORMAT fmt = DXGI_FORMAT_UNKNOWN;
+    UINT width = 0, height = 1, samples = 1, bytes = 0;
+    if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
+        D3D11_TEXTURE2D_DESC d{};
+        { ID3D11Texture2D* q = nullptr; if (SUCCEEDED(r->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&q))) && q) { q->GetDesc(&d); q->Release(); } }
+        fmt = d.Format; width = d.Width; height = d.Height; samples = d.SampleDesc.Count;
+    } else if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE1D) {
+        D3D11_TEXTURE1D_DESC d{};
+        { ID3D11Texture1D* q = nullptr; if (SUCCEEDED(r->QueryInterface(__uuidof(ID3D11Texture1D), reinterpret_cast<void**>(&q))) && q) { q->GetDesc(&d); q->Release(); } }
+        fmt = d.Format; width = d.Width;
+    } else if (dim == D3D11_RESOURCE_DIMENSION_BUFFER) {
+        D3D11_BUFFER_DESC d{};
+        { ID3D11Buffer* q = nullptr; if (SUCCEEDED(r->QueryInterface(__uuidof(ID3D11Buffer), reinterpret_cast<void**>(&q))) && q) { q->GetDesc(&d); q->Release(); } }
+        bytes = d.ByteWidth;
+        fmt = vd.Format;
+        width = bytes / 16;
+    }
     static bool loggedDesc = false;
     if (!loggedDesc) {
         loggedDesc = true;
-        Log("STEREO: StereoParams texture found: %ux%u, format %d, usage %d", d.Width, d.Height, static_cast<int>(d.Format), static_cast<int>(d.Usage));
+        Log("STEREO: StereoParams found: resource type %d (2 = 1D texture, 3 = 2D texture, 1 = buffer), %ux%u, format %d, view format %d, %u bytes",
+            static_cast<int>(dim), width, height, static_cast<int>(fmt), static_cast<int>(vd.Format), bytes);
     }
-    if (d.Format != DXGI_FORMAT_R32G32B32A32_FLOAT || d.SampleDesc.Count != 1) {
+    const bool floatRgba = fmt == DXGI_FORMAT_R32G32B32A32_FLOAT || vd.Format == DXGI_FORMAT_R32G32B32A32_FLOAT;
+    if (!floatRgba || samples != 1 || width == 0 ||
+        (dim != D3D11_RESOURCE_DIMENSION_TEXTURE2D && dim != D3D11_RESOURCE_DIMENSION_TEXTURE1D && dim != D3D11_RESOURCE_DIMENSION_BUFFER)) {
         if (!g_probeWarned) {
             g_probeWarned = true;
-            Log("STEREO: could not read geo-11's separation (StereoParams format %d); using the default shift", static_cast<int>(d.Format));
+            Log("STEREO: could not read geo-11's separation (unexpected StereoParams layout); using the default shift");
         }
-        t->Release();
+        r->Release();
         g_probeAt = now + 60000;
         return;
     }
     if (!g_probeStaging) {
+        g_probeTexW = width < 8 ? width : 8;
         ID3D11Device* dev = nullptr;
-        c->GetDevice(&dev);
-        D3D11_TEXTURE2D_DESC sd{};
-        g_probeTexW = d.Width < 8 ? d.Width : 8;
-        sd.Width = g_probeTexW;
-        sd.Height = 1;
-        sd.MipLevels = 1;
-        sd.ArraySize = 1;
-        sd.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-        sd.SampleDesc.Count = 1;
-        sd.Usage = D3D11_USAGE_STAGING;
-        sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        r->GetDevice(&dev);
         if (dev) {
-            dev->CreateTexture2D(&sd, nullptr, &g_probeStaging);
+            if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
+                D3D11_TEXTURE2D_DESC sd{};
+                sd.Width = g_probeTexW; sd.Height = 1; sd.MipLevels = 1; sd.ArraySize = 1;
+                sd.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; sd.SampleDesc.Count = 1;
+                sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                ID3D11Texture2D* t = nullptr;
+                dev->CreateTexture2D(&sd, nullptr, &t);
+                g_probeStaging = t;
+            } else if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE1D) {
+                D3D11_TEXTURE1D_DESC sd{};
+                sd.Width = g_probeTexW; sd.MipLevels = 1; sd.ArraySize = 1;
+                sd.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+                sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                ID3D11Texture1D* t = nullptr;
+                dev->CreateTexture1D(&sd, nullptr, &t);
+                g_probeStaging = t;
+            } else {
+                D3D11_BUFFER_DESC sd{};
+                sd.ByteWidth = g_probeTexW * 16;
+                sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                ID3D11Buffer* t = nullptr;
+                dev->CreateBuffer(&sd, nullptr, &t);
+                g_probeStaging = t;
+            }
             dev->Release();
         }
         if (!g_probeStaging) {
-            t->Release();
+            Log("STEREO: could not read geo-11's separation (no staging copy); using the default shift");
+            r->Release();
             g_probeAt = now + 60000;
             return;
         }
     }
-    const D3D11_BOX box{0, 0, 0, g_probeTexW, 1, 1};
-    c->CopySubresourceRegion(g_probeStaging, 0, 0, 0, 0, t, 0, &box);
-    t->Release();
+    // First row (or first bytes of the buffer) only.
+    const D3D11_BOX box = dim == D3D11_RESOURCE_DIMENSION_BUFFER ? D3D11_BOX{0, 0, 0, g_probeTexW * 16, 1, 1}
+                                                                : D3D11_BOX{0, 0, 0, g_probeTexW, 1, 1};
+    c->CopySubresourceRegion(g_probeStaging, 0, 0, 0, 0, r, 0, &box);
+    r->Release();
     g_probePending = true;
     g_probeAt = now + 50;  // read it back a few frames later
 }
