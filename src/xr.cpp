@@ -76,10 +76,10 @@ void ReadSettings() {
     // geo-11 slides each eye's image sideways by a fixed amount, which the views we send to the headset
     // cancel. geo-11 works it out per PC (from the monitor's physical size), so once the game draws, the
     // real value is read from geo-11's StereoParams texture (drawlog.cpp, XrSetMeasuredShift). Until then
-    // 0.0187 is used: the value on the PC DS3 VR was developed on, at geo-11 separation 20 (which the mod
-    // resets every launch). Not read from ds3vr.ini any more (a 0 or a typo there gave a doubled
+    // 0.0209 is used: geo-11's own value on the PC DS3 VR was developed on, at separation 20 (which the
+    // mod resets every launch). Earlier versions used 0.0187, measured from screenshots, about 11% low. Not read from ds3vr.ini any more (a 0 or a typo there gave a doubled
     // picture); StereoShiftOverride (non-zero) is only for testing.
-    constexpr float kStereoShiftSep20 = 0.0187f;
+    constexpr float kStereoShiftSep20 = 0.0209f;
     float s = kStereoShiftSep20;
     GetPrivateProfileStringW(L"ds3vr", L"StereoShiftOverride", L"0", v, 32, ini.c_str());
     const float over = static_cast<float>(_wtof(v));
@@ -1160,12 +1160,10 @@ void XrSetMeasuredShift(float s, float convergence, float eye) {
         first = false;
         return;
     }
-    // Check build: the reading is logged next to the value in use, but not applied yet.
-    constexpr bool kApplyMeasuredShift = false;
-    Log("STEREO: geo-11's separation reads %.4f (convergence %.3f, eye %+.0f); the mod is using %.4f%s", s, convergence, eye, cur,
-        kApplyMeasuredShift ? ", switching to the reading" : " (check build: reading not applied yet)");
+    Log("STEREO: geo-11's separation is %.4f (convergence %.3f); the views now cancel it (was %.4f)", s, convergence, cur);
+    (void)eye;
     first = false;
-    if (kApplyMeasuredShift) g_shift.store(s);
+    g_shift.store(s);
 }
 
 int XrGetPoseLag() { return g_poseLag.load(); }

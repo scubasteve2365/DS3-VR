@@ -232,7 +232,7 @@ ULONGLONG g_probeStatAt = 0;
 void StereoProbe(ID3D11DeviceContext* c) {
     const ULONGLONG now = GetTickCount64();
     if (!g_probeStartMs) g_probeStartMs = now;
-    if (!g_probeEverRead && now >= g_probeStatAt) {
+    if (!g_probeEverRead && now >= g_probeStatAt && now - g_probeStartMs < 60000) {
         if (g_probeStatAt) Log("STEREO: probe looked at %llu draws in the last 10 s, slot 125 bound in %llu", g_probeDraws, g_probeHits);
         g_probeDraws = g_probeHits = 0;
         g_probeStatAt = now + 10000;
@@ -247,7 +247,7 @@ void StereoProbe(ID3D11DeviceContext* c) {
         if (FAILED(hr)) return;
         const float* f = static_cast<const float*>(m.pData);
         const float sep = f[0], conv = f[1], eye = f[2];
-        if (g_probeRawLogs < 6) {
+        if (g_probeRawLogs < 1) {
             ++g_probeRawLogs;
             char b[512];
             int n = snprintf(b, sizeof(b), "STEREO: StereoParams row 0 (%u texels):", g_probeTexW);
@@ -259,7 +259,7 @@ void StereoProbe(ID3D11DeviceContext* c) {
         if (std::fabs(sep) > 0.0005f && std::fabs(sep) < 0.3f) {
             XrSetMeasuredShift(std::fabs(sep), conv, eye);
             g_probeEverRead = true;
-        } else if (g_probeRawLogs <= 6) {
+        } else if (g_probeRawLogs <= 1) {
             Log("STEREO: separation value %.5g is out of range; not used", sep);
         }
         return;
@@ -274,7 +274,9 @@ void StereoProbe(ID3D11DeviceContext* c) {
             g_probeWarned = true;
             Log("STEREO: could not read geo-11's separation (no StereoParams texture seen); using the default shift");
         }
-        return;  // look at the next draw
+        // Until it is found, look at every draw; after two minutes without it, only once a second.
+        if (!g_probeEverRead && now - g_probeStartMs > 120000) g_probeAt = now + 1000;
+        return;
     }
     D3D11_SHADER_RESOURCE_VIEW_DESC vd{};
     srv->GetDesc(&vd);
