@@ -14,7 +14,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -38,14 +38,28 @@ jobs:
 
       - name: Install the mingw-w64 toolchain
         if: steps.check.outputs.go == 'true'
-        timeout-minutes: 10
+        timeout-minutes: 12
         # Non-interactive, so no package prompt (e.g. needrestart) can wait for an answer that never comes.
         env:
           DEBIAN_FRONTEND: noninteractive
           NEEDRESTART_MODE: a
+        # Each attempt gets 3 minutes; a stalled mirror or trigger is killed and retried instead of eating the whole step.
         run: |
-          sudo -E apt-get -o Acquire::Retries=3 update -q
-          sudo -E apt-get install -y -q --no-install-recommends g++-mingw-w64-x86-64-win32 binutils-mingw-w64-x86-64 zip
+          # The man-db index rebuild after installing can take many minutes on these runners and is not needed.
+          echo "man-db man-db/auto-update boolean false" | sudo debconf-set-selections
+          sudo rm -f /var/lib/man-db/auto-update
+          OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60"
+          ok=0
+          for attempt in 1 2 3; do
+            echo "toolchain install, attempt $attempt"
+            if sudo -E timeout 180 apt-get $OPTS update -q &&
+               sudo -E timeout 180 apt-get $OPTS install -y -q --no-install-recommends g++-mingw-w64-x86-64-win32 binutils-mingw-w64-x86-64 zip; then
+              ok=1; break
+            fi
+            sudo dpkg --configure -a || true
+            sleep 10
+          done
+          [ "$ok" = 1 ]
           x86_64-w64-mingw32-g++ --version | head -1
 
       - name: Build
