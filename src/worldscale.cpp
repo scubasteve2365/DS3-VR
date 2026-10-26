@@ -14,10 +14,16 @@ namespace {
 // geo-11 convergence for world scale 1 (life size) with dm_separation 20, our measured stereo shift
 // and the headset-shaped view; scale s uses s times this.
 constexpr float kBaseConvergence = 1.4834f;
-constexpr int kSteps = 9;  // 1.0, 1.5, ... 5.0
 constexpr int kSepBase = 20;                 // geo-11 separation the normal view is aligned for
 constexpr float kPerUnit = 0.001045f;        // geo-11 NDC eye shift per unit of dm_separation (0.0209 at 20)
-float g_scale = 1.f;
+
+// World scale steps the menu can reach. Below 1.0 the world looks bigger (0.25 is the largest),
+// above 1.0 it looks smaller (10.0 is the smallest). One hotkey section per step (F13 upwards).
+constexpr float kScales[] = {0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f, 5.0f, 7.0f, 10.0f};
+constexpr int kSteps = static_cast<int>(sizeof(kScales) / sizeof(kScales[0]));
+constexpr float kLifeSize = 1.0f;
+
+float g_scale = kLifeSize;
 int g_heldVk = 0;          // key currently held down for geo-11
 int g_frames = 0;          // frames left before releasing it
 int g_sep = kSepBase;                        // dm_separation written at this launch
@@ -42,6 +48,13 @@ bool WriteAll(const std::wstring& p, const std::string& s) {
     fwrite(s.data(), 1, s.size(), f);
     fclose(f);
     return true;
+}
+
+// Writes to a temporary file, then replaces the target, so a failed write cannot leave a half-written file.
+bool ReplaceFile(const std::wstring& p, const std::string& s) {
+    const std::wstring tmp = p + L".tmp";
+    if (!WriteAll(tmp, s)) return false;
+    return MoveFileExW(tmp.c_str(), p.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
 }
 
 // Replaces the value of the first "key = value" line that starts a line.
@@ -80,15 +93,54 @@ std::string GetLine(const std::string& s, const std::string& key) {
     return std::string();
 }
 
-float Snap(float s) {
-    s = std::round(s * 2.f) / 2.f;
-    return s < 1.f ? 1.f : s > 5.f ? 5.f : s;
+// The index of the step nearest to s.
+int StepIndex(float s) {
+    int best = 0;
+    for (int i = 1; i < kSteps; ++i)
+        if (std::fabs(kScales[i] - s) < std::fabs(kScales[best] - s)) best = i;
+    return best;
 }
+
+float Snap(float s) { return kScales[StepIndex(s)]; }
 
 std::string Conv(float s) {
     char b[32];
     snprintf(b, sizeof(b), "%.3f", g_convPerScale * s);
     return b;
+}
+
+// The hotkey sections geo-11 switches between, one per step, with this launch's convergence values.
+std::string KeyBlock() {
+    std::string out =
+        "; ds3vr: world scale 0.25 (largest world) to 10.0 (smallest). The mod menu presses one of F13 to F24\n"
+        "; (keys real keyboards do not have) to pick a step. DS3 VR writes these convergence values at each launch.\n";
+    for (int i = 0; i < kSteps; ++i) {
+        char b[256];
+        snprintf(b, sizeof(b),
+                 "[KeyDs3vrWorldScale%d]\nKey = no_modifiers VK_F%d\ntype = activate\nconvergence = %.3f\ntransition = 300\n"
+                 "transition_type = cosine\n\n",
+                 i + 1, 13 + i, g_convPerScale * kScales[i]);
+        out += b;
+    }
+    return out;
+}
+
+// Replaces the world-scale hotkey block (from its first comment to the lock-on marker section).
+bool UpdateKeyBlock(std::string& s) {
+    const size_t a = s.find("; ds3vr: world scale");
+    const size_t b = s.find("; ds3vr: the lock-on marker");
+    if (a == std::string::npos || b == std::string::npos || b < a) return false;
+    std::string block = KeyBlock();
+    if (s.find("\r\n") != std::string::npos) {  // match the file's line endings (d3dx.ini from the installer uses CRLF)
+        std::string crlf;
+        for (char c : block) {
+            if (c == '\n') crlf += '\r';
+            crlf += c;
+        }
+        block = crlf;
+    }
+    s.replace(a, b - a, block);
+    return true;
 }
 
 void Key(int vk, bool down) {
@@ -172,14 +224,28 @@ void WorldScaleEarly() {
             SetLine(dm, "dm_auto_convergence", "0");
             Log("WORLDSCALE: geo-11 automatic convergence was on; switched off (DS3 VR sets convergence itself)");
         }
-        // geo-11's convergence limits (3 / 4) are below the larger world scales; lift them so a saved
-        // scale is not clipped at startup.
-        SetLine(dm, "dm_max_convergence_soft", "10.0");
-        SetLine(dm, "dm_max_convergence_hard", "10.0");
-        if (ok && dm != before) ok = WriteAll(Path(L"d3dxdm.ini"), dm);
+        // geo-11 clamps convergence to these limits (the soft and hard ones, and the absolute overrides
+        // that apply on top). The scale range needs about 0.1 to 20 in magnitude, so lift them all, and
+        // allow magnitudes down to 0.01 (the largest world scale in the each-eye view is about -0.11).
+        SetLine(dm, "dm_max_convergence_soft", "20.0");
+        SetLine(dm, "dm_max_convergence_hard", "20.0");
+        SetLine(dm, "dm_max_convergence_soft_absolute_override", "20.0");
+        SetLine(dm, "dm_max_convergence_hard_absolute_override", "20.0");
+        SetLine(dm, "dm_min_convergence", "0.01");
+        SetLine(dm, "dm_min_convergence_absolute_override", "0.01");
+        if (ok && dm != before) ok = ReplaceFile(Path(L"d3dxdm.ini"), dm);
     }
-    Log("WORLDSCALE: starting at %.1f (geo-11 separation %s, convergence %s, each-eye view %s): d3dxdm.ini %s",
-        g_scale, sepStr.c_str(), Conv(g_scale).c_str(), ev.on ? "on" : "off", ok ? "ok" : "NOT updated");
+    // The world-scale hotkeys: geo-11 reads d3dx.ini once, at its own start, so the steps are written here.
+    std::string dx;
+    bool keysOk = false;
+    if (ReadAll(Path(L"d3dx.ini"), dx)) {
+        const std::string before = dx;
+        keysOk = UpdateKeyBlock(dx);
+        if (keysOk && dx != before) keysOk = ReplaceFile(Path(L"d3dx.ini"), dx);
+    }
+    Log("WORLDSCALE: starting at %.2f (geo-11 separation %s, convergence %s, each-eye view %s): d3dxdm.ini %s, d3dx.ini steps %s",
+        g_scale, sepStr.c_str(), Conv(g_scale).c_str(), ev.on ? "on" : "off", ok ? "ok" : "NOT updated",
+        keysOk ? "ok" : "NOT updated (the world-scale block was not found)");
 }
 
 float WorldScaleGet() { return g_scale; }
@@ -198,26 +264,25 @@ void WorldScaleSetEyeViewWanted(bool on) {
 }
 
 void WorldScaleSet(float scale) {
-    scale = Snap(scale);
+    const int step = StepIndex(scale);
     if (g_heldVk) return;  // one change at a time (takes a few frames)
-    const int step = static_cast<int>(std::lround((scale - 1.f) * 2.f));
-    if (step < 0 || step >= kSteps) return;
+    scale = kScales[step];
     wchar_t v[16];
-    swprintf(v, 16, L"%.1f", scale);
-    if (Decided().on) {
-        // The convergence keys set absolute values for the normal view; in the each-eye view they would
-        // break the eye offset. The new scale is saved and applied at the next launch.
-        g_scale = scale;
-        WritePrivateProfileStringW(L"ds3vr", L"WorldScale", v, Path(L"ds3vr.ini").c_str());
-        Log("menu: world scale %.1f saved; it applies at the next launch (each-eye view)", scale);
-        return;
-    }
+    swprintf(v, 16, L"%.2f", scale);
     g_heldVk = VK_F13 + step;
     g_frames = 4;  // geo-11 checks keys once per frame; hold long enough to be seen
     Key(g_heldVk, true);
     g_scale = scale;
     WritePrivateProfileStringW(L"ds3vr", L"WorldScale", v, Path(L"ds3vr.ini").c_str());
-    Log("menu: world scale %.1f (geo-11 convergence %s, saved)", scale, Conv(scale).c_str());
+    Log("menu: world scale %.2f (geo-11 convergence %s, saved)", scale, Conv(scale).c_str());
+}
+
+void WorldScaleStep(int delta) {
+    const int cur = StepIndex(g_scale);
+    int next = cur + delta;
+    if (next < 0) next = 0;
+    if (next >= kSteps) next = kSteps - 1;
+    if (next != cur) WorldScaleSet(kScales[next]);
 }
 
 void WorldScaleTick() {

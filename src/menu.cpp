@@ -211,8 +211,9 @@ void BuildUi() {
     char v[96];
     // World scale
     const float ws = WorldScaleGet();
-    snprintf(v, sizeof(v), "%.1f%s", ws, ws == 1.f ? "  (life size)" : "");
-    if (const int d = Stepper("World scale", v, "ws")) WorldScaleSet(ws + 0.5f * d);
+    const char* note = ws == 1.f ? "  (life size)" : ws == 0.25f ? "  (largest)" : ws == 10.f ? "  (smallest)" : "";
+    snprintf(v, sizeof(v), ws < 1.f ? "%.2f%s" : "%.1f%s", ws, note);
+    if (const int d = Stepper("World scale", v, "ws")) WorldScaleStep(d);
     {
         const bool lock = CamHookGetHorizonLock();
         ImGui::AlignTextToFramePadding();
