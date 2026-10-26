@@ -11,6 +11,7 @@
 
 #include "MinHook.h"
 #include "log.h"
+#include "worldscale.h"
 #include "xr.h"
 
 namespace ds3vr {
@@ -66,6 +67,9 @@ bool HeadsetAspectSaved() {
     return v[0] != 0;
 }
 
+// The headset aspect the render width comes from: the each-eye view keeps its own, narrower one.
+const wchar_t* AspectKey() { return WorldScaleEyeViewActive() ? L"HeadsetAspectEye" : L"HeadsetAspect"; }
+
 void ReadSettings() {
     if (g_read) return;
     g_read = true;
@@ -88,7 +92,7 @@ void ReadSettings() {
         // Automatic width: the headset's shape, remembered from the last run (the headset is not
         // known yet this early). The first run uses a typical value.
         wchar_t v[32] = {};
-        GetPrivateProfileStringW(L"state", L"HeadsetAspect", L"1.42", v, 32, ini.c_str());
+        GetPrivateProfileStringW(L"state", AspectKey(), L"1.42", v, 32, ini.c_str());
         float a = static_cast<float>(_wtof(v));
         if (a < 0.6f || a > 2.5f) a = 1.42f;
         g_w = static_cast<unsigned>(static_cast<float>(g_h) * a + 0.5f);
@@ -225,7 +229,7 @@ bool RenderSizeNextLaunch(unsigned* w, unsigned* h, bool* fixed) {
     }
     if (nw == 0) {
         wchar_t v[32] = {};
-        GetPrivateProfileStringW(L"state", L"HeadsetAspect", L"1.42", v, 32, ini.c_str());
+        GetPrivateProfileStringW(L"state", AspectKey(), L"1.42", v, 32, ini.c_str());
         float a = static_cast<float>(_wtof(v));
         if (a < 0.6f || a > 2.5f) a = 1.42f;
         nw = static_cast<unsigned>(static_cast<float>(nh) * a + 0.5f);

@@ -309,6 +309,14 @@ void BuildUi() {
             ImGui::TextUnformatted("  Head movement");
             ImGui::SameLine(430.f);
             if (ImGui::Button(sh ? "x world scale  (default)" : "life size", ImVec2(0.f, 0.f))) CamHookSetScaleHead(!sh);
+            // Each eye's own view (experimental): a narrower picture per eye, so fewer pixels are drawn.
+            const bool eye = WorldScaleEyeViewWanted();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("  Each eye's own view");
+            ImGui::SameLine(430.f);
+            if (ImGui::Button(eye ? "On  (experimental)" : "Off  (default)", ImVec2(0.f, 0.f))) WorldScaleSetEyeViewWanted(!eye);
+            if (eye != WorldScaleEyeViewActive())
+                ImGui::TextDisabled("  Restart the game to apply. It needs one VR run first, to measure the headset.");
         }
     }
 
@@ -332,6 +340,7 @@ void BuildUi() {
         XrSetPoseLag(2);
         CamHookSetScaleHead(true);
         CamHookSetHorizonLock(false);
+        WorldScaleSetEyeViewWanted(false);
         SetAdvancedShown(false);
         SetDevKeys(false);
         Log("menu: settings reset to defaults");

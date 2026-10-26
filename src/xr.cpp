@@ -20,6 +20,7 @@
 
 #include "camhook.h"
 #include "rendersize.h"
+#include "worldscale.h"
 #include "hud.h"
 #include "menu.h"
 #include "log.h"
@@ -896,22 +897,38 @@ bool TickXR() {
                 // Squeeze the game's view to the headset's shape: wide enough for the outer edge of
                 // each eye after geo-11's sideways shift, plus a little margin.
                 float outer = 0.f, inner = 0.f;
+                float halfEye[2] = {0.f, 0.f}, centreEye[2] = {0.f, 0.f};
                 for (int e = 0; e < 2; ++e) {
                     const float l = std::tan(-v[e].fov.angleLeft), r = std::tan(v[e].fov.angleRight);
                     outer = std::fmax(outer, e == 0 ? l : r);
                     inner = std::fmax(inner, e == 0 ? r : l);
+                    // This eye's own lens: its centre (negative for the left eye, whose outer edge is wider) and half-width.
+                    halfEye[e] = 0.5f * (l + r);
+                    centreEye[e] = 0.5f * (r - l);
                 }
                 const float S = g_shift.load();
                 const float tanX = 1.03f * std::fmax(outer / (1.f - S), inner / (1.f + S));
                 const float tanY = std::tan(std::fmax(up, down));
+                // Each eye's own view (Advanced option): one width for both eyes, each eye's frustum centred on
+                // its own lens. eyeK is the offset as a fraction of that width; geo-11's shift is set to it at launch.
+                const float halfH = 1.03f * std::fmax(halfEye[0], halfEye[1]);
+                const float eyeK = 0.5f * (std::fabs(centreEye[0]) + std::fabs(centreEye[1])) / halfH;
+                const float eyeAspect = halfH / tanY;
                 {
-                    wchar_t v[32];
-                    swprintf(v, 32, L"%.4f", tanX / tanY);
-                    WritePrivateProfileStringW(L"state", L"HeadsetAspect", v, (std::wstring(ModuleDir()) + L"ds3vr.ini").c_str());
+                    wchar_t wbuf[32];
+                    swprintf(wbuf, 32, L"%.4f", tanX / tanY);
+                    WritePrivateProfileStringW(L"state", L"HeadsetAspect", wbuf, (std::wstring(ModuleDir()) + L"ds3vr.ini").c_str());
+                    swprintf(wbuf, 32, L"%.4f", eyeAspect);
+                    WritePrivateProfileStringW(L"state", L"HeadsetAspectEye", wbuf, (std::wstring(ModuleDir()) + L"ds3vr.ini").c_str());
+                    swprintf(wbuf, 32, L"%.5f", eyeK);
+                    WritePrivateProfileStringW(L"state", L"HeadsetEyeK", wbuf, (std::wstring(ModuleDir()) + L"ds3vr.ini").c_str());
                 }
                 Log("XR: headset-shaped render size: aspect %.3f, e.g. RenderWidth=%u RenderHeight=1440 or RenderWidth=%u RenderHeight=2160",
                     tanX / tanY, static_cast<unsigned>(1440.f * tanX / tanY + 1.f) & ~7u, static_cast<unsigned>(2160.f * tanX / tanY + 1.f) & ~7u);
-                if (!fixedSize) CamHookSetAspect(tanX / tanY);
+                Log("XR: each-eye view: lens centres %+.4f %+.4f, half-width %.4f, offset %.4f (geo-11 separation about %.1f), aspect %.4f; "
+                    "EachEyeView=1 uses it at the next launch",
+                    centreEye[0], centreEye[1], halfH, eyeK, eyeK / 0.001045f, eyeAspect);
+                if (!fixedSize) CamHookSetAspect(WorldScaleEyeViewActive() ? eyeAspect : tanX / tanY);
             }
             g_loggedViews = true;
         }
@@ -970,18 +987,25 @@ bool TickXR() {
                 float asp = 0.f;
                 if (!CamHookAppliedAspect(g_poseLag.load(std::memory_order_relaxed), &asp) || asp <= 0.f) asp = static_cast<float>(eyeW) / static_cast<float>(H);
                 const float tanX = tanY * asp;
-                const float S = g_shift.load(std::memory_order_relaxed);
+                // Each eye's own view (decided at launch, so it cannot change while the game runs).
+                const bool eyeView = WorldScaleEyeViewActive();
+                const float Sraw = g_shift.load(std::memory_order_relaxed);
+                const float S = eyeView ? std::fabs(Sraw) : Sraw;
                 const float rx = 1.f - 2.f * (hq[1] * hq[1] + hq[2] * hq[2]);
                 const float ry = 2.f * (hq[0] * hq[1] + hq[2] * hq[3]);
                 const float rz = 2.f * (hq[0] * hq[2] - hq[1] * hq[3]);
                 const float half = 0.5f * g_ipd;
-                const bool swap = g_swapEyes.load(std::memory_order_relaxed);
+                // Negative convergence (each-eye view) flips geo-11's eye translation, so its two halves come out
+                // the other way round: the swap is toggled for that view.
+                const bool swap = g_swapEyes.load(std::memory_order_relaxed) != eyeView;
                 for (int e = 0; e < 2; ++e) {
                     // Which half of geo-11's texture this eye sees. Measured: geo-11 puts the LEFT eye in the
                     // RIGHT half of the Katanga texture (LeftEyeHalf=1).
                     const int img = ((e == 0) ? g_leftHalf : 1 - g_leftHalf) ^ (swap ? 1 : 0);
                     // geo-11 slides the left eye's image left and the right eye's image right by S (NDC).
-                    const float s = (e == 0) ? S : -S;
+                    // In the each-eye view each half holds the other eye's image, so the signs are reversed and
+                    // each eye's view is centred on its own lens (-S for the left eye).
+                    const float s = eyeView ? ((e == 0) ? -S : S) : ((e == 0) ? S : -S);
                     const float k = (e == 0) ? -half : half;
                     pv[e].pose.orientation = {hq[0], hq[1], hq[2], hq[3]};
                     pv[e].pose.position = {hp[0] + k * rx, hp[1] + k * ry, hp[2] + k * rz};
@@ -1004,11 +1028,11 @@ bool TickXR() {
                 static bool logged = false;
                 if (!logged) {
                     logged = true;
-                    Log("XR: in game: stereo view, game fov %.1f x %.1f deg per eye, pose lag %d", 2.f * std::atan(tanX) * kR2D,
-                        fovY * kR2D, g_poseLag.load());
+                    Log("XR: in game: stereo view (each-eye view %s), game fov %.1f x %.1f deg per eye, pose lag %d",
+                        eyeView ? "on" : "off", 2.f * std::atan(tanX) * kR2D, fovY * kR2D, g_poseLag.load());
                     const float P00 = 1.f / tanX;
                     const float d = 0.5f * g_ipd * g_worldScale;
-                    if (S > 0.f)
+                    if (S > 0.f && !eyeView)
                         Log("XR: for WorldScale %.2f with stereo shift %.4f, geo-11 needs dm_convergence = %.3f (at dm_separation = 100)",
                             g_worldScale, S, P00 * d / S);
                 }
