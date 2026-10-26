@@ -12,6 +12,7 @@
 
 #include "MinHook.h"
 #include "camhook.h"
+#include "firstperson.h"
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
 #include "log.h"
@@ -208,6 +209,21 @@ void BuildUi() {
     ImGui::Separator();
     ImGui::Spacing();
 
+    // View: third person (the default) or first person (First Person Souls), switched while you play
+    {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("View");
+        ImGui::SameLine(430.f);
+        if (FirstPersonAvailable()) {
+            const bool fp = FirstPersonWanted();
+            if (fp) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
+            if (ImGui::Button(fp ? "First person" : "Third person  (default)", ImVec2(0.f, 0.f))) FirstPersonSet(!fp);
+            if (fp) ImGui::PopStyleColor();
+        } else {
+            ImGui::TextDisabled("Third person  (first person unavailable: see ds3vr.log)");
+        }
+    }
+
     char v[96];
     // World scale
     const float ws = WorldScaleGet();
@@ -333,6 +349,7 @@ void BuildUi() {
         XrSetPoseLag(2);
         CamHookSetScaleHead(true);
         CamHookSetHorizonLock(false);
+        if (FirstPersonWanted()) FirstPersonSet(false);
         SetAdvancedShown(false);
         SetDevKeys(false);
         Log("menu: settings reset to defaults");

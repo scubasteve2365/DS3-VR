@@ -18,10 +18,19 @@ for f in buffer hook trampoline; do $CC -O2 -c -I$M/include $M/src/$f.c -o $O/$f
 $CC -O2 -c $M/src/hde/hde64.c -o $O/hde64.o
 for f in imgui imgui_draw imgui_tables imgui_widgets; do $CXX -O2 -std=c++17 -c -I$I $I/$f.cpp -o $O/$f.o; done
 $CXX -O2 -std=c++17 -c -I$I $I/backends/imgui_impl_dx11.cpp -o $O/imgui_impl_dx11.o
+# First person: First Person Souls (third_party/ds3fps, MIT) with its asmjit, built with the settings its
+# Visual Studio project used (UNICODE, Windows 10 headers, SSE 4.1). Only these files get those settings.
+P=third_party/ds3fps
+PB="-O2 -std=c++17 -msse4.1 -DASMJIT_STATIC -DASMJIT_NO_AARCH64 -DNDEBUG -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0A00 -DNTDDI_VERSION=0x0A000006"
+PF="$PB -w"  # their code and asmjit: built as they ship it, warnings off
+for f in $P/src/*.cpp $P/src/camera/*.cpp; do $CXX $PF -c $f -o $O/fp_$(basename $f .cpp).o; done
+for f in $(find $P/include/asmjit -name '*.cpp'); do $CXX $PF -c $f -o $O/aj_$(echo $f | tr / _).o; done
+$CXX $PB -Wall -Isrc -isystem $P -c src/firstperson.cpp -o $O/firstperson.o
 $CXX -O2 -Wall -std=c++17 -shared -static-libgcc -static-libstdc++ -mthreads -I$M/include -I$I -I$I/backends -Ithird_party/openxr/include -Isrc \
   -o build/dinput8.dll src/dllmain.cpp src/log.cpp src/proxy_dinput8.cpp src/present.cpp src/xr.cpp src/camhook.cpp src/rendersize.cpp \
   src/fps.cpp src/hud.cpp src/drawlog.cpp src/worldscale.cpp src/menu.cpp src/dinput8.def \
   $O/buffer.o $O/hook.o $O/trampoline.o $O/hde64.o $O/imgui.o $O/imgui_draw.o $O/imgui_tables.o $O/imgui_widgets.o $O/imgui_impl_dx11.o \
+  $O/firstperson.o $O/fp_*.o $O/aj_*.o \
   -luser32 -ladvapi32 -lpsapi
 
 # ds3vr-patcher.exe (7-Zip's public-domain C decoder unpacks Helifax's fix archive)

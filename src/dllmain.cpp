@@ -8,6 +8,7 @@
 #include "rendersize.h"
 #include "worldscale.h"
 #include "fps.h"
+#include "firstperson.h"
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
@@ -143,6 +144,8 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
         if (IsEnabled()) {
             ds3vr::RenderSizeEarly();
             ds3vr::WorldScaleEarly();
+            // First Person Souls patches the game's code here, as its own dll does at load.
+            ds3vr::FirstPersonEarly();
         }
         // Do the real work off the loader lock.
         HANDLE t = CreateThread(nullptr, 0, InitThread, nullptr, 0, nullptr);
