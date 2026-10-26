@@ -49,6 +49,7 @@ std::atomic<int> g_poseLag{2};
 float g_worldScale = 1.f;
 bool g_shiftOverride = false;            // ds3vr.ini StereoShiftOverride: keep it, ignore geo-11's reading
 std::atomic<float> g_shift{0.f};      // geo-11's per-eye image shift at infinity, in NDC (2 = full width)
+std::atomic<float> g_geo11Sign{1.f};  // sign geo-11 reports for its eye-0 shift (-1 with negative convergence)
 std::atomic<bool> g_swapEyes{false};
 int g_aspectMode = 1;                 // ds3vr.ini RenderAspect: 1 = headset shape, 0 = the game's 16:9
 int g_leftHalf = 1;                   // which half of geo-11's texture holds the left eye (0 = left, 1 = right)
@@ -995,9 +996,10 @@ bool TickXR() {
                 const float ry = 2.f * (hq[0] * hq[1] + hq[2] * hq[3]);
                 const float rz = 2.f * (hq[0] * hq[2] - hq[1] * hq[3]);
                 const float half = 0.5f * g_ipd;
-                // Negative convergence (each-eye view) flips geo-11's eye translation, so its two halves come out
-                // the other way round: the swap is toggled for that view.
-                const bool swap = g_swapEyes.load(std::memory_order_relaxed) != eyeView;
+                // Each-eye view: the left eye needs geo-11's image shifted left (its lens centre is on the left).
+                // Whether that image is the left-eye half depends on the sign geo-11 reports for eye 0's shift:
+                // negative means eye 0's own half already shifts left, so no swap; positive means swap.
+                const bool swap = g_swapEyes.load(std::memory_order_relaxed) != (eyeView && g_geo11Sign.load() > 0.f);
                 for (int e = 0; e < 2; ++e) {
                     // Which half of geo-11's texture this eye sees. Measured: geo-11 puts the LEFT eye in the
                     // RIGHT half of the Katanga texture (LeftEyeHalf=1).
@@ -1030,6 +1032,9 @@ bool TickXR() {
                     logged = true;
                     Log("XR: in game: stereo view (each-eye view %s), game fov %.1f x %.1f deg per eye, pose lag %d",
                         eyeView ? "on" : "off", 2.f * std::atan(tanX) * kR2D, fovY * kR2D, g_poseLag.load());
+                    if (eyeView)
+                        Log("XR: each-eye view: geo-11 eye 0 shift sign %+.0f, eyes %s, declared offsets %+.4f (left) %+.4f (right)",
+                            g_geo11Sign.load(), swap ? "swapped" : "as normal", -S, S);
                     const float P00 = 1.f / tanX;
                     const float d = 0.5f * g_ipd * g_worldScale;
                     if (S > 0.f && !eyeView)
@@ -1318,6 +1323,9 @@ bool XrEyeImageSize(unsigned* w, unsigned* h) {
 }
 
 void XrSetMeasuredShift(float s, float convergence, float eye) {
+    // s is geo-11's signed separation for eye 0's record. Its sign says which way geo-11 shifts that eye's image.
+    g_geo11Sign.store(s < 0.f ? -1.f : 1.f);
+    s = std::fabs(s);
     static bool first = true;
     const float cur = g_shift.load();
     static float lastLogged = -1.f;
