@@ -29,6 +29,9 @@ bool g_read = false;
 // The game reads GraphicsConfig.xml early in startup. Until our early headset query has finished,
 // opening that file waits for it (up to 10 s), so the size SteamVR asks for applies right away.
 HANDLE g_queryDone = nullptr;
+// How long the game waits for that query. A fresh install (no HeadsetAspect saved yet) also reads the
+// headset's shape in a short VR session, which takes longer, so it waits longer; set in RenderSizeEarly.
+DWORD g_waitMs = 5000;
 // 0 = the headset query is still running, 1 = it set this run's size, 2 = the game went ahead first
 // (the size the game read must then stay for the whole run, or its window and geo-11's output disagree).
 std::atomic<int> g_sizePhase{0};
@@ -46,7 +49,7 @@ HANDLE WINAPI CreateFileWDetour(LPCWSTR name, DWORD access, DWORD share, LPSECUR
             const ULONGLONG t0 = GetTickCount64();
             // Only a short wait: when the VR runtime is still starting (the first launch of a session), a long
             // stall here leaves a black window that can get closed. A late answer is used from the next launch.
-            const DWORD w = WaitForSingleObject(g_queryDone, 5000);
+            const DWORD w = WaitForSingleObject(g_queryDone, g_waitMs);
             int expect = 0;
             const bool late = w != WAIT_OBJECT_0 && g_sizePhase.compare_exchange_strong(expect, 2);
             Log("RENDERSIZE: the game opened GraphicsConfig.xml; waited %llu ms for the headset query%s",
@@ -54,6 +57,13 @@ HANDLE WINAPI CreateFileWDetour(LPCWSTR name, DWORD access, DWORD share, LPSECUR
         }
     }
     return g_origCreateFileW(name, access, share, sa, disp, flags, tmpl);
+}
+
+// True once ds3vr.ini holds the headset's aspect (saved by an earlier run). A fresh install has none.
+bool HeadsetAspectSaved() {
+    wchar_t v[32] = {};
+    GetPrivateProfileStringW(L"state", L"HeadsetAspect", L"", v, 32, (std::wstring(ModuleDir()) + L"ds3vr.ini").c_str());
+    return v[0] != 0;
 }
 
 void ReadSettings() {
@@ -241,6 +251,7 @@ void RenderSizeEarly() {
     {
         std::wstring ini = std::wstring(ModuleDir()) + L"ds3vr.ini";
         if (GetPrivateProfileIntW(L"ds3vr", L"RenderHeight", 0, ini.c_str()) == 0) {
+            g_waitMs = HeadsetAspectSaved() ? 5000 : 20000;
             g_queryDone = CreateEventW(nullptr, TRUE, FALSE, nullptr);
             void* target = reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernelbase.dll"), "CreateFileW"));
             MH_STATUS s = MH_Initialize();
@@ -280,7 +291,7 @@ std::wstring XrQueryFilePath() {
 // QueryXrHeight below), so none of the runtime's code is loaded into the game while the game and
 // geo-11 are still setting up graphics. The game itself only connects to the runtime later, once
 // it is running (xr.cpp).
-bool QueryHeightInHelper(unsigned* height, unsigned* width = nullptr) {
+bool QueryHeightInHelper(unsigned* height, unsigned* width = nullptr, float* aspect = nullptr, bool shape = false) {
     const std::wstring out = XrQueryFilePath();
     DeleteFileW(out.c_str());
     wchar_t self[MAX_PATH] = {};
@@ -290,7 +301,8 @@ bool QueryHeightInHelper(unsigned* height, unsigned* width = nullptr) {
     GetModuleFileNameW(me, self, MAX_PATH);
     wchar_t sys[MAX_PATH] = {};
     GetSystemDirectoryW(sys, MAX_PATH);
-    std::wstring cmd = L"\"" + std::wstring(sys) + L"\\rundll32.exe\" \"" + self + L"\",QueryXrHeight " + out;
+    std::wstring cmd = L"\"" + std::wstring(sys) + L"\\rundll32.exe\" \"" + self + L"\",QueryXrHeight " + out +
+                       (shape ? L" shape" : L"");
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
@@ -307,15 +319,17 @@ bool QueryHeightInHelper(unsigned* height, unsigned* width = nullptr) {
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     unsigned h = 0, rw = 0;
+    float a = 0.f;
     FILE* f = _wfopen(out.c_str(), L"r");
     if (f) {
-        if (fscanf(f, "%u %u", &h, &rw) < 1) h = 0;
+        if (fscanf(f, "%u %u %f", &h, &rw, &a) < 1) h = 0;
         fclose(f);
     }
     DeleteFileW(out.c_str());
     if (!h) return false;
     *height = h;
     if (width) *width = rw;
+    if (aspect) *aspect = a;
     return true;
 }
 } // namespace
@@ -327,15 +341,27 @@ void RenderSizeRefreshFromHeadset() {
     std::wstring ini = std::wstring(ModuleDir()) + L"ds3vr.ini";
     if (GetPrivateProfileIntW(L"ds3vr", L"RenderHeight", 0, ini.c_str()) != 0) return;  // fixed height
     const ULONGLONG t0 = GetTickCount64();
+    // A fresh install has no headset aspect yet: read the headset's shape too (a short VR session in the helper).
+    const bool needShape = !HeadsetAspectSaved();
     unsigned want = 0;
-    if (!QueryHeightInHelper(&want) || want < 480 || want > 8192) {
+    float shape = 0.f;
+    if (!QueryHeightInHelper(&want, nullptr, &shape, needShape) || want < 480 || want > 8192) {
         Log("RENDERSIZE: could not ask the VR runtime early; using the remembered height %u", g_h);
         return;
     }
     wchar_t v[32];
     swprintf(v, 32, L"%u", want);
     WritePrivateProfileStringW(L"state", L"HeadsetHeight", v, ini.c_str());
-    if (want == g_h) {
+    const bool haveShape = shape >= 0.6f && shape <= 2.5f;
+    if (needShape && haveShape) {
+        swprintf(v, 32, L"%.4f", shape);
+        WritePrivateProfileStringW(L"state", L"HeadsetAspect", v, ini.c_str());
+        Log("RENDERSIZE: headset shape read at first launch: aspect %.4f (saved)", shape);
+    }
+    // Width: the headset's shape (fresh install: just read; otherwise the aspect in use).
+    const float aspect = (needShape && haveShape) ? shape : static_cast<float>(g_w) / static_cast<float>(g_h);
+    const unsigned newW = static_cast<unsigned>(static_cast<float>(want) * aspect + 0.5f) & ~1u;
+    if (want == g_h && newW == g_w) {
         Log("RENDERSIZE: VR runtime asks for %u per eye (same as remembered), %llu ms", want, GetTickCount64() - t0);
         return;
     }
@@ -343,13 +369,12 @@ void RenderSizeRefreshFromHeadset() {
     if (!g_sizePhase.compare_exchange_strong(expect, 1)) {
         // The game already read its settings with the remembered size; changing it now would leave the
         // window and geo-11's output at different sizes (a scrambled view). Next launch uses the new size.
-        Log("RENDERSIZE: could not switch to the new headset size %u this run (the game had already started with %u); "
-            "the next launch uses it", want, g_h);
+        Log("RENDERSIZE: could not switch to the new headset size %ux%u this run (the game had already started with %ux%u); "
+            "the next launch uses it", newW, want, g_w, g_h);
         return;
     }
-    const float aspect = static_cast<float>(g_w) / static_cast<float>(g_h);
     g_h = want;
-    g_w = static_cast<unsigned>(static_cast<float>(g_h) * aspect + 0.5f) & ~1u;
+    g_w = newW;
     uint8_t* exe = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
     const uint32_t entry[2] = {g_w, g_h};
     WriteMem(exe + kResTableRva, entry, sizeof(entry));
@@ -414,13 +439,27 @@ void RenderSizePatchLetterbox() {
 
 // rundll32 entry point (helper process; no game, no geo-11): ask the VR runtime for the per-eye height
 // it wants and write it to the file named on the command line.
+// Command line: <file> [shape]. With "shape" the helper also opens a short VR session to read the
+// headset's aspect (first launch only); if that fails, the height alone is written (aspect 0).
 extern "C" __declspec(dllexport) void CALLBACK QueryXrHeight(HWND, HINSTANCE, LPSTR cmdLine, int) {
     ds3vr::LogDisable();
+    std::string args = cmdLine ? cmdLine : "";
+    bool shape = false;
+    const std::string tag = " shape";
+    if (args.size() >= tag.size() && args.compare(args.size() - tag.size(), tag.size(), tag) == 0) {
+        shape = true;
+        args.erase(args.size() - tag.size());
+    }
+    if (args.size() >= 2 && args.front() == '"' && args.back() == '"') args = args.substr(1, args.size() - 2);
     unsigned h = 0;
     unsigned w = 0;
-    if (!ds3vr::XrQueryRecommendedHeight(&h, &w) || !h) return;
-    FILE* f = fopen(cmdLine, "w");
+    float a = 0.f;
+    if (!(shape && ds3vr::XrQueryHeadsetShape(&h, &w, &a) && h)) {
+        a = 0.f;
+        if (!ds3vr::XrQueryRecommendedHeight(&h, &w) || !h) return;
+    }
+    FILE* f = fopen(args.c_str(), "w");
     if (!f) return;
-    fprintf(f, "%u %u\n", h, w);
+    fprintf(f, "%u %u %.5f\n", h, w, a);
     fclose(f);
 }

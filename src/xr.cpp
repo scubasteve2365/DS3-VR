@@ -1131,6 +1131,148 @@ bool XrQueryRecommendedHeight(unsigned* height, unsigned* width) {
     return ok;
 }
 
+// The headset's real shape, read in a short OpenXR session before the game starts (rundll32 helper only,
+// used on a fresh install, where ds3vr.ini has no HeadsetAspect yet). The aspect is the one the game's
+// view is fitted to later (the same formula as the in-game code that saves HeadsetAspect). The
+// recommended rectangle is NOT the same shape (on Steve's Dream Air 4336x3772 recommended, but the
+// fitted view is 1.298), so the field of view is what counts. Stereo shift: the game's own value is not
+// known yet, so the usual value for this setup is used (about 2% different from the in-game result).
+bool XrQueryHeadsetShape(unsigned* height, unsigned* width, float* aspect) {
+    if (!LoadRuntime()) return false;
+    typedef HRESULT(WINAPI * PFN_D3D11CreateDevice_)(IDXGIAdapter*, D3D_DRIVER_TYPE, HMODULE, UINT, const D3D_FEATURE_LEVEL*,
+                                                     UINT, UINT, ID3D11Device**, D3D_FEATURE_LEVEL*, ID3D11DeviceContext**);
+    HMODULE d3d = LoadLibraryW(L"d3d11.dll");
+    PFN_D3D11CreateDevice_ createDevice = d3d ? reinterpret_cast<PFN_D3D11CreateDevice_>(GetProcAddress(d3d, "D3D11CreateDevice")) : nullptr;
+    if (!createDevice) return false;
+    ID3D11Device* dev = nullptr;
+    if (FAILED(createDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0,
+                            D3D11_SDK_VERSION, &dev, nullptr, nullptr)) ||
+        !dev)
+        return false;
+
+    PFN_xrCreateInstance create = nullptr;
+    PFN_xrDestroyInstance destroy = nullptr;
+    PFN_xrGetSystem getSystem = nullptr;
+    PFN_xrEnumerateViewConfigurationViews enumViews = nullptr;
+    PFN_xrGetD3D11GraphicsRequirementsKHR getReq = nullptr;
+    PFN_xrCreateSession createSession = nullptr;
+    PFN_xrDestroySession destroySession = nullptr;
+    PFN_xrCreateReferenceSpace createSpace = nullptr;
+    PFN_xrPollEvent pollEvent = nullptr;
+    PFN_xrBeginSession beginSession = nullptr;
+    PFN_xrEndSession endSession = nullptr;
+    PFN_xrWaitFrame waitFrame = nullptr;
+    PFN_xrLocateViews locateViews = nullptr;
+    if (!Get(XR_NULL_HANDLE, "xrCreateInstance", create)) {
+        dev->Release();
+        return false;
+    }
+    const char* exts[] = {XR_KHR_D3D11_ENABLE_EXTENSION_NAME};
+    XrInstanceCreateInfo ici{XR_TYPE_INSTANCE_CREATE_INFO};
+    strcpy_s(ici.applicationInfo.applicationName, "ds3vr");
+    strcpy_s(ici.applicationInfo.engineName, "ds3vr");
+    ici.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+    ici.enabledExtensionCount = 1;
+    ici.enabledExtensionNames = exts;
+    XrInstance inst = XR_NULL_HANDLE;
+    bool ok = false;
+    XrSession session = XR_NULL_HANDLE;
+    XrSpace space = XR_NULL_HANDLE;
+    bool begun = false;
+    if (XR_SUCCEEDED(create(&ici, &inst)) &&
+        Get(inst, "xrDestroyInstance", destroy) && Get(inst, "xrGetSystem", getSystem) &&
+        Get(inst, "xrEnumerateViewConfigurationViews", enumViews) &&
+        Get(inst, "xrGetD3D11GraphicsRequirementsKHR", getReq) && Get(inst, "xrCreateSession", createSession) &&
+        Get(inst, "xrDestroySession", destroySession) && Get(inst, "xrCreateReferenceSpace", createSpace) &&
+        Get(inst, "xrPollEvent", pollEvent) && Get(inst, "xrBeginSession", beginSession) &&
+        Get(inst, "xrEndSession", endSession) && Get(inst, "xrWaitFrame", waitFrame) &&
+        Get(inst, "xrLocateViews", locateViews)) {
+        XrSystemGetInfo sgi{XR_TYPE_SYSTEM_GET_INFO};
+        sgi.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
+        XrSystemId sys = XR_NULL_SYSTEM_ID;
+        XrGraphicsRequirementsD3D11KHR req{XR_TYPE_GRAPHICS_REQUIREMENTS_D3D11_KHR};
+        if (XR_SUCCEEDED(getSystem(inst, &sgi, &sys)) && XR_SUCCEEDED(getReq(inst, sys, &req))) {
+            XrGraphicsBindingD3D11KHR gb{XR_TYPE_GRAPHICS_BINDING_D3D11_KHR};
+            gb.device = dev;
+            XrSessionCreateInfo sci{XR_TYPE_SESSION_CREATE_INFO};
+            sci.next = &gb;
+            sci.systemId = sys;
+            XrViewConfigurationView v[2] = {{XR_TYPE_VIEW_CONFIGURATION_VIEW}, {XR_TYPE_VIEW_CONFIGURATION_VIEW}};
+            uint32_t n = 0;
+            if (XR_SUCCEEDED(enumViews(inst, sys, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &n, v)) && n >= 1 &&
+                XR_SUCCEEDED(createSession(inst, &sci, &session))) {
+                XrReferenceSpaceCreateInfo rsci{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+                rsci.poseInReferenceSpace.orientation.w = 1.f;
+                rsci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+                if (XR_SUCCEEDED(createSpace(session, &rsci, &space))) {
+                    // Wait for the runtime to be ready (it can take a few seconds when it has just started), then
+                    // read the field of view. Gives up after 15 s; the caller then keeps its defaults.
+                    const ULONGLONG t0 = GetTickCount64();
+                    bool exiting = false;
+                    while (!ok && !exiting && GetTickCount64() - t0 < 15000) {
+                        XrEventDataBuffer ev{XR_TYPE_EVENT_DATA_BUFFER};
+                        while (pollEvent(inst, &ev) == XR_SUCCESS) {
+                            if (ev.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
+                                const XrSessionState st = reinterpret_cast<XrEventDataSessionStateChanged*>(&ev)->state;
+                                if (st == XR_SESSION_STATE_READY && !begun) {
+                                    XrSessionBeginInfo bi{XR_TYPE_SESSION_BEGIN_INFO};
+                                    bi.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+                                    if (XR_SUCCEEDED(beginSession(session, &bi))) begun = true;
+                                }
+                                if (st == XR_SESSION_STATE_EXITING || st == XR_SESSION_STATE_LOSS_PENDING) exiting = true;
+                            }
+                            ev = {XR_TYPE_EVENT_DATA_BUFFER};
+                        }
+                        if (!begun || exiting) {
+                            Sleep(100);
+                            continue;
+                        }
+                        XrFrameWaitInfo fwi{XR_TYPE_FRAME_WAIT_INFO};
+                        XrFrameState fs{XR_TYPE_FRAME_STATE};
+                        if (XR_FAILED(waitFrame(session, &fwi, &fs))) break;
+                        XrViewLocateInfo vli{XR_TYPE_VIEW_LOCATE_INFO};
+                        vli.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+                        vli.displayTime = fs.predictedDisplayTime;
+                        vli.space = space;
+                        XrViewState vs{XR_TYPE_VIEW_STATE};
+                        XrView views[2] = {{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
+                        uint32_t cnt = 0;
+                        if (XR_SUCCEEDED(locateViews(session, &vli, &vs, 2, &cnt, views)) && cnt == 2 &&
+                            views[0].fov.angleRight > views[0].fov.angleLeft) {
+                            // The same formula as the in-game view fit (see XrRender's HeadsetAspect code).
+                            const float S = g_shift.load();
+                            float outer = 0.f, inner = 0.f, up = 0.f, down = 0.f;
+                            for (int e = 0; e < 2; ++e) {
+                                const float l = std::tan(-views[e].fov.angleLeft), r = std::tan(views[e].fov.angleRight);
+                                outer = std::fmax(outer, e == 0 ? l : r);
+                                inner = std::fmax(inner, e == 0 ? r : l);
+                                up = std::fmax(up, views[e].fov.angleUp);
+                                down = std::fmax(down, -views[e].fov.angleDown);
+                            }
+                            const float tanX = 1.03f * std::fmax(outer / (1.f - S), inner / (1.f + S));
+                            const float tanY = std::tan(std::fmax(up, down));
+                            *aspect = tanX / tanY;
+                            XrViewConfigurationView rv[2] = {{XR_TYPE_VIEW_CONFIGURATION_VIEW}, {XR_TYPE_VIEW_CONFIGURATION_VIEW}};
+                            uint32_t rn = 0;
+                            if (XR_SUCCEEDED(enumViews(inst, sys, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &rn, rv)) && rn >= 1) {
+                                *height = rv[0].recommendedImageRectHeight & ~1u;
+                                if (width) *width = rv[0].recommendedImageRectWidth;
+                            }
+                            ok = *aspect > 0.f && *height > 0;
+                        }
+                        if (!ok) Sleep(50);
+                    }
+                }
+            }
+        }
+    }
+    if (begun && endSession) endSession(session);
+    if (session != XR_NULL_HANDLE && destroySession) destroySession(session);
+    if (inst != XR_NULL_HANDLE && destroy) destroy(inst);
+    dev->Release();
+    return ok;
+}
+
 bool XrRecommendedNow(unsigned* w, unsigned* h) {
     if (g_inst == XR_NULL_HANDLE || g_sys == XR_NULL_SYSTEM_ID || !xrEnumerateViewConfigurationViews_) return false;
     XrViewConfigurationView v[2] = {{XR_TYPE_VIEW_CONFIGURATION_VIEW}, {XR_TYPE_VIEW_CONFIGURATION_VIEW}};

@@ -32,6 +32,9 @@ void XrCycleHudMode();             // F7: HUD fixed / follows head / hidden     
 
 // Asks the VR runtime for its recommended per-eye height (temporary instance, no session).
 bool XrQueryRecommendedHeight(unsigned* height, unsigned* width = nullptr);
+// Like the above, but also reads the headset's real shape (aspect from the field of view) in a short
+// VR session. For the rundll32 helper on a fresh install. Gives up after about 15 s.
+bool XrQueryHeadsetShape(unsigned* height, unsigned* width, float* aspect);
 // While running (render thread): the per-eye size the VR runtime recommends right now, asked on the
 // game's own OpenXR connection.
 bool XrRecommendedNow(unsigned* w, unsigned* h);
