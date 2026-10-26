@@ -60,8 +60,23 @@ void Filter(XINPUT_STATE* s) {
         const DWORD pkt = s->dwPacketNumber;
         ZeroMemory(&s->Gamepad, sizeof(s->Gamepad));
         s->dwPacketNumber = pkt;
-    } else if (g_swallowThumbs.load(std::memory_order_relaxed)) {
-        s->Gamepad.wButtons &= ~(XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB);
+    } else {
+        if (g_swallowThumbs.load(std::memory_order_relaxed))
+            s->Gamepad.wButtons &= ~(XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB);
+        if (FirstPersonActive()) {
+            // First person: the game moves along its camera, but you look with the headset. Turn the left
+            // stick by the head's turn, so pushing up moves where you look (stick up = forward, x = right;
+            // a head turned left by y makes "up" point left by y).
+            const float y = CamHookHeadYaw();
+            if (std::fabs(y) > 0.001f) {
+                const float c = std::cos(y), sn = std::sin(y);
+                const float x0 = s->Gamepad.sThumbLX, y0 = s->Gamepad.sThumbLY;
+                const float x1 = x0 * c - y0 * sn, y1 = x0 * sn + y0 * c;
+                auto clamp = [](float v) { return static_cast<SHORT>(v > 32767.f ? 32767.f : v < -32768.f ? -32768.f : v); };
+                s->Gamepad.sThumbLX = clamp(x1);
+                s->Gamepad.sThumbLY = clamp(y1);
+            }
+        }
     }
 }
 
@@ -345,11 +360,11 @@ void BuildUi() {
     ImGui::SameLine();
     if (ImGui::Button("Reset to defaults", ImVec2(380.f, 0.f))) {
         XrSetHudSettings(HudSettings{0, 1.0f, 1.2f, 0.10f}, true);
+        if (FirstPersonWanted()) FirstPersonSet(false);  // first, so the scale below is saved as the third-person one
         WorldScaleSet(1.f);
         XrSetPoseLag(2);
         CamHookSetScaleHead(true);
         CamHookSetHorizonLock(false);
-        if (FirstPersonWanted()) FirstPersonSet(false);
         SetAdvancedShown(false);
         SetDevKeys(false);
         Log("menu: settings reset to defaults");

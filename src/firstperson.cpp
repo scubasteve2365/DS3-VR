@@ -13,6 +13,7 @@
 #include <string>
 
 #include "log.h"
+#include "worldscale.h"
 
 namespace ds3vr {
 namespace {
@@ -71,6 +72,7 @@ void FirstPersonSet(bool on) {
     g_wanted = on;
     ::g_ds3vrStartFirstPerson = on;
     ::g_ds3vrViewRequest.store(on ? 1 : 2);
+    WorldScaleFirstPerson(on);  // life size in first person; the third-person scale comes back after
     WritePrivateProfileStringW(L"ds3vr", L"FirstPerson", on ? L"1" : L"0", IniPath().c_str());
     Log("menu: %s person (saved)", on ? "first" : "third");
 }

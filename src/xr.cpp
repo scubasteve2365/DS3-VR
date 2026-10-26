@@ -1295,6 +1295,11 @@ bool XrEyeImageSize(unsigned* w, unsigned* h) {
 
 void XrSetMeasuredShift(float s, float convergence, float eye) {
     static bool first = true;
+    // geo-11's convergence (read about every 5 s): logged when it changes, to check world-scale steps arrive.
+    static float lastConv = 0.f;
+    if (!first && std::fabs(convergence - lastConv) > 0.002f)
+        Log("STEREO: geo-11 convergence now %.3f (world scale %.2f)", convergence, convergence / 1.4834f);
+    lastConv = convergence;
     const float cur = g_shift.load();
     static float lastLogged = -1.f;
     if (!first && std::fabs(s - lastLogged) < 0.0002f) return;

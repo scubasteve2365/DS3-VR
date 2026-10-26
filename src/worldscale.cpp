@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <string>
 
+#include "firstperson.h"
 #include "log.h"
 
 namespace ds3vr {
@@ -16,15 +17,31 @@ namespace {
 constexpr float kBaseConvergence = 1.4834f;
 constexpr int kSepBase = 20;                 // geo-11 separation the VR alignment (StereoShift) is measured for
 
-// World scale steps the menu can reach. Below 1.0 the world looks bigger (0.25 is the largest),
-// above 1.0 it looks smaller (10.0 is the smallest). One hotkey section per step (F13 upwards).
-constexpr float kScales[] = {0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f, 5.0f, 7.0f, 10.0f};
+// World scale steps the menu can reach: 0.25, then 0.5 to 10.0 in steps of 0.5. Below 1.0 the world
+// looks bigger (0.25 is the largest), above 1.0 it looks smaller (10.0 is the smallest).
+constexpr float kScales[] = {0.25f, 0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 3.5f, 4.0f, 4.5f, 5.0f,
+                             5.5f,  6.0f, 6.5f, 7.0f, 7.5f, 8.0f, 8.5f, 9.0f, 9.5f, 10.0f};
 constexpr int kSteps = static_cast<int>(sizeof(kScales) / sizeof(kScales[0]));
 constexpr float kLifeSize = 1.0f;
+
+// One hotkey per step, none of which a keyboard sends: F13 to F24, then the unassigned virtual-key
+// codes 0x97 to 0x9F (geo-11 takes hex codes in d3dx.ini).
+constexpr int kFKeys = 12;
+static_assert(kSteps <= kFKeys + 9, "not enough spare keys for the world scale steps");
+int StepVk(int i) { return i < kFKeys ? VK_F13 + i : 0x97 + (i - kFKeys); }
+std::string StepKeyName(int i) {
+    char b[16];
+    if (i < kFKeys) snprintf(b, sizeof(b), "VK_F%d", 13 + i);
+    else snprintf(b, sizeof(b), "0x%02X", StepVk(i));
+    return b;
+}
 
 float g_scale = kLifeSize;
 int g_heldVk = 0;          // key currently held down for geo-11
 int g_frames = 0;          // frames left before releasing it
+float g_pending = 0.f;     // a change asked for while a key was held, applied once it is released
+bool g_pendingSave = false;
+bool g_firstPerson = false;  // first person: the scale is 1.0 and changes are not saved over the third-person one
 
 std::wstring Path(const wchar_t* name) { return std::wstring(ModuleDir()) + name; }
 
@@ -109,15 +126,15 @@ std::string Conv(float s) {
 // The hotkey sections geo-11 switches between, one per step, with this launch's convergence values.
 std::string KeyBlock() {
     std::string out =
-        "; ds3vr: world scale 0.25 (largest world) to 10.0 (smallest). The mod menu presses one of F13 to F24\n"
-        "; (keys real keyboards do not have) to pick a step; convergence = 1.4834 x scale for dm_separation 20.\n"
-        "; DS3 VR writes this block at each launch.\n";
+        "; ds3vr: world scale 0.25 (largest world) to 10.0 (smallest). The mod menu presses one of F13 to F24 or\n"
+        "; 0x97 to 0x9F (keys real keyboards do not have) to pick a step; convergence = 1.4834 x scale for\n"
+        "; dm_separation 20. DS3 VR writes this block at each launch.\n";
     for (int i = 0; i < kSteps; ++i) {
         char b[256];
         snprintf(b, sizeof(b),
-                 "[KeyDs3vrWorldScale%d]\nKey = no_modifiers VK_F%d\ntype = activate\nconvergence = %.3f\ntransition = 300\n"
+                 "[KeyDs3vrWorldScale%d]\nKey = no_modifiers %s\ntype = activate\nconvergence = %.3f\ntransition = 300\n"
                  "transition_type = cosine\n\n",
-                 i + 1, 13 + i, kBaseConvergence * kScales[i]);
+                 i + 1, StepKeyName(i).c_str(), kBaseConvergence * kScales[i]);
         out += b;
     }
     return out;
@@ -149,12 +166,41 @@ void Key(int vk, bool down) {
     SendInput(1, &in, sizeof(in));
 }
 
+// The third-person scale saved in ds3vr.ini (WorldScale).
+float SavedScale() {
+    wchar_t v[32] = {};
+    GetPrivateProfileStringW(L"ds3vr", L"WorldScale", L"1", v, 32, Path(L"ds3vr.ini").c_str());
+    return Snap(static_cast<float>(_wtof(v)));
+}
+
+// Switches geo-11 to a step (it takes a few frames). save = keep it as the third-person scale.
+void Apply(float scale, bool save) {
+    const int step = StepIndex(scale);
+    scale = kScales[step];
+    if (g_heldVk) {  // one key at a time: do this one when the current key is released
+        g_pending = scale;
+        g_pendingSave = save;
+        return;
+    }
+    g_heldVk = StepVk(step);
+    g_frames = 4;  // geo-11 checks keys once per frame; hold long enough to be seen
+    Key(g_heldVk, true);
+    g_scale = scale;
+    if (save) {
+        wchar_t v[16];
+        swprintf(v, 16, L"%.2f", scale);
+        WritePrivateProfileStringW(L"ds3vr", L"WorldScale", v, Path(L"ds3vr.ini").c_str());
+    }
+    Log("world scale %.2f (geo-11 convergence %s%s)", scale, Conv(scale).c_str(),
+        save ? ", saved" : g_firstPerson ? ", first person: not saved" : "");
+}
+
 } // namespace
 
 void WorldScaleEarly() {
-    wchar_t v[32] = {};
-    GetPrivateProfileStringW(L"ds3vr", L"WorldScale", L"1", v, 32, Path(L"ds3vr.ini").c_str());
-    g_scale = Snap(static_cast<float>(_wtof(v)));
+    // A run that starts in first person starts at life size; the saved third-person scale is kept.
+    g_firstPerson = FirstPersonAvailable() && FirstPersonWanted();
+    g_scale = g_firstPerson ? kLifeSize : SavedScale();
     const std::string sepStr = std::to_string(kSepBase);
     std::string dm;
     bool ok = false;
@@ -192,27 +238,21 @@ void WorldScaleEarly() {
         keysOk = UpdateKeyBlock(dx);
         if (keysOk && dx != before) keysOk = ReplaceFile(Path(L"d3dx.ini"), dx);
     }
-    Log("WORLDSCALE: starting at %.2f (geo-11 separation %s, convergence %s): d3dxdm.ini %s, d3dx.ini steps %s",
-        g_scale, sepStr.c_str(), Conv(g_scale).c_str(), ok ? "ok" : "NOT updated",
-        keysOk ? "ok" : "NOT updated (the world-scale block was not found)");
+    Log("WORLDSCALE: starting at %.2f%s (geo-11 separation %s, convergence %s): d3dxdm.ini %s, d3dx.ini steps %s",
+        g_scale, g_firstPerson ? " (first person; third-person scale kept)" : "", sepStr.c_str(), Conv(g_scale).c_str(),
+        ok ? "ok" : "NOT updated", keysOk ? "ok" : "NOT updated (the world-scale block was not found)");
 }
 
 float WorldScaleGet() { return g_scale; }
 
 bool WorldScaleBusy() { return g_heldVk != 0; }
 
-void WorldScaleSet(float scale) {
-    const int step = StepIndex(scale);
-    if (g_heldVk) return;  // one change at a time (takes a few frames)
-    scale = kScales[step];
-    wchar_t v[16];
-    swprintf(v, 16, L"%.2f", scale);
-    g_heldVk = VK_F13 + step;
-    g_frames = 4;  // geo-11 checks keys once per frame; hold long enough to be seen
-    Key(g_heldVk, true);
-    g_scale = scale;
-    WritePrivateProfileStringW(L"ds3vr", L"WorldScale", v, Path(L"ds3vr.ini").c_str());
-    Log("menu: world scale %.2f (geo-11 convergence %s, saved)", scale, Conv(scale).c_str());
+void WorldScaleSet(float scale) { Apply(scale, !g_firstPerson); }
+
+void WorldScaleFirstPerson(bool on) {
+    if (on == g_firstPerson) return;
+    g_firstPerson = on;
+    Apply(on ? kLifeSize : SavedScale(), false);
 }
 
 void WorldScaleStep(int delta) {
@@ -227,6 +267,11 @@ void WorldScaleTick() {
     if (g_heldVk && --g_frames <= 0) {
         Key(g_heldVk, false);
         g_heldVk = 0;
+        if (g_pending > 0.f) {
+            const float s = g_pending;
+            g_pending = 0.f;
+            Apply(s, g_pendingSave);
+        }
     }
 }
 
