@@ -15,10 +15,15 @@
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
 #include "log.h"
+#include "menu_font.h"
 #include "rendersize.h"
 #include "version.h"
 #include "worldscale.h"
 #include "xr.h"
+
+// Dark Souls III menu colours, matched by eye from the game's own menus (no pixel sampling).
+static const ImVec4 kMenuAccent(0.85f, 0.68f, 0.32f, 1.f);    // headings and the focus ring (was bright yellow)
+static const ImVec4 kMenuSelected(0.62f, 0.44f, 0.16f, 1.f);  // a chosen option (was orange)
 
 // ImGui's DX11 backend compiles its two small shaders with D3DCompile at start-up. Rather than
 // making dinput8.dll depend on d3dcompiler_47.dll at load time, load it only when it is needed.
@@ -113,12 +118,10 @@ bool InitImGui(ID3D11Device* dev, ID3D11DeviceContext* c) {
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
     io.ConfigNavCursorVisibleAlways = true;
     io.DisplaySize = ImVec2(static_cast<float>(kW), static_cast<float>(kH));
-    wchar_t win[MAX_PATH] = {};
-    GetWindowsDirectoryW(win, MAX_PATH);
-    char font[MAX_PATH * 3] = {};
-    WideCharToMultiByte(CP_UTF8, 0, (std::wstring(win) + L"\\Fonts\\segoeui.ttf").c_str(), -1, font, sizeof(font), nullptr, nullptr);
-    if (GetFileAttributesA(font) != INVALID_FILE_ATTRIBUTES && io.Fonts->AddFontFromFileTTF(font, 44.f)) {
-    } else {
+    // EB Garamond is embedded (menu_font.h), so the menu looks the same on every PC.
+    ImFontConfig fontCfg;
+    fontCfg.FontDataOwnedByAtlas = false;  // the font bytes are static data
+    if (!io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(kMenuFontData), static_cast<int>(kMenuFontSize), 44.f, &fontCfg)) {
         ImFontConfig cfg;
         cfg.SizePixels = 13.f * 3.f;
         io.Fonts->AddFontDefault(&cfg);
@@ -128,8 +131,15 @@ bool InitImGui(ID3D11Device* dev, ID3D11DeviceContext* c) {
     st.ScaleAllSizes(2.2f);
     st.WindowRounding = 18.f;
     st.FrameRounding = 10.f;
-    st.Colors[ImGuiCol_WindowBg] = ImVec4(0.06f, 0.06f, 0.08f, 0.94f);
-    st.Colors[ImGuiCol_NavCursor] = ImVec4(1.f, 0.78f, 0.3f, 1.f);
+    // Warm near-black panels, parchment text, bronze-gold accents.
+    st.Colors[ImGuiCol_WindowBg] = ImVec4(0.05f, 0.045f, 0.035f, 0.94f);
+    st.Colors[ImGuiCol_Text] = ImVec4(0.87f, 0.81f, 0.67f, 1.f);
+    st.Colors[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.45f, 0.36f, 1.f);
+    st.Colors[ImGuiCol_Separator] = ImVec4(0.42f, 0.34f, 0.20f, 1.f);
+    st.Colors[ImGuiCol_Button] = ImVec4(0.16f, 0.14f, 0.11f, 1.f);
+    st.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.27f, 0.23f, 0.16f, 1.f);
+    st.Colors[ImGuiCol_ButtonActive] = ImVec4(0.37f, 0.30f, 0.18f, 1.f);
+    st.Colors[ImGuiCol_NavCursor] = kMenuAccent;
     if (!ImGui_ImplDX11_Init(dev, c)) {
         Log("menu: ImGui DX11 backend failed to start");
         return false;
@@ -192,7 +202,7 @@ void BuildUi() {
     ImGui::Begin("DS3 VR", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
-    ImGui::TextColored(ImVec4(1.f, 0.78f, 0.3f, 1.f), "DARK SOULS III VR");
+    ImGui::TextColored(kMenuAccent, "DARK SOULS III VR");
     ImGui::SameLine();
     ImGui::TextDisabled("v" DS3VR_VERSION);
     ImGui::Separator();
@@ -208,7 +218,7 @@ void BuildUi() {
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Horizon lock");
         ImGui::SameLine(430.f);
-        if (lock) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.52f, 0.12f, 1.f));
+        if (lock) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
         if (ImGui::Button(lock ? "On  (stick does not tilt the view)" : "Off  (free camera)", ImVec2(0.f, 0.f))) CamHookSetHorizonLock(!lock);
         if (lock) ImGui::PopStyleColor();
     }
@@ -224,7 +234,7 @@ void BuildUi() {
     for (int i = 0; i < 3; ++i) {
         if (i) ImGui::SameLine();
         const bool sel = h.mode == i;
-        if (sel) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.52f, 0.12f, 1.f));
+        if (sel) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
         if (ImGui::Button(modes[i])) {
             h.mode = i;
             changed = true;
