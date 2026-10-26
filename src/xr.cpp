@@ -1240,7 +1240,9 @@ bool XrQueryHeadsetShape(unsigned* height, unsigned* width, float* aspect) {
                         if (XR_SUCCEEDED(locateViews(session, &vli, &vs, 2, &cnt, views)) && cnt == 2 &&
                             views[0].fov.angleRight > views[0].fov.angleLeft) {
                             // The same formula as the in-game view fit (see XrRender's HeadsetAspect code).
-                            const float S = g_shift.load();
+                            // geo-11 has not run in this process, so its shift is unknown here: use the value
+                            // measured on Steve's setup (0.0209). Zero would make the aspect about 2% too low.
+                            const float S = 0.0209f;
                             float outer = 0.f, inner = 0.f, up = 0.f, down = 0.f;
                             for (int e = 0; e < 2; ++e) {
                                 const float l = std::tan(-views[e].fov.angleLeft), r = std::tan(views[e].fov.angleRight);
