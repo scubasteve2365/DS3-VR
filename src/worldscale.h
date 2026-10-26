@@ -16,11 +16,4 @@ void WorldScaleStep(int delta);  // from the menu: one step up (+1) or down (-1)
 void WorldScaleTick();           // every frame: releases the key pressed for geo-11
 bool WorldScaleBusy();           // a change is being applied
 
-// Each eye's own view (Advanced, off by default): each eye's frustum is centred on its own lens, which
-// needs a larger geo-11 separation and negative convergence. Decided once per run (see worldscale.cpp);
-// the menu choice takes effect at the next launch.
-bool WorldScaleEyeViewActive();  // this run uses the each-eye view
-bool WorldScaleEyeViewWanted();  // ds3vr.ini EachEyeView = 1
-void WorldScaleSetEyeViewWanted(bool on);
-
 } // namespace ds3vr

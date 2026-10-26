@@ -257,7 +257,7 @@ void StereoProbe(ID3D11DeviceContext* c) {
         }
         c->Unmap(g_probeStaging, 0);
         if (std::fabs(sep) > 0.0005f && std::fabs(sep) < 0.3f) {
-            XrSetMeasuredShift(sep, conv, eye);  // signed: the sign says which way geo-11 shifts eye 0
+            XrSetMeasuredShift(std::fabs(sep), conv, eye);
             g_probeEverRead = true;
         } else if (g_probeRawLogs <= 1) {
             Log("STEREO: separation value %.5g is out of range; not used", sep);
