@@ -12,6 +12,7 @@
 
 #include "MinHook.h"
 #include "camhook.h"
+#include "dlss.h"
 #include "drawlog.h"
 #include "fps.h"
 #include "hud.h"
@@ -151,6 +152,7 @@ void OnPresent(IDXGISwapChain* sc) {
         ID3D11Device* dev = nullptr;
         if (SUCCEEDED(sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&dev))) && dev) {
             DrawLogOnPresent(dev);
+            DlssOnPresent(dev);
             dev->Release();
         }
     }
