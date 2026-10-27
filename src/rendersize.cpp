@@ -10,6 +10,7 @@
 #include <string>
 
 #include "MinHook.h"
+#include "dlss.h"
 #include "log.h"
 #include "xr.h"
 
@@ -98,6 +99,17 @@ void ReadSettings() {
     g_h &= ~1u;
 }
 
+// The size the game renders at: the headset size, or smaller when DLSS upscales this run (each eye is
+// upscaled back to the headset size before it reaches the headset).
+unsigned GameW() {
+    const float s = DlssLaunchScale();
+    return s < 1.f ? static_cast<unsigned>(static_cast<float>(g_w) * s + 0.5f) & ~1u : g_w;
+}
+unsigned GameH() {
+    const float s = DlssLaunchScale();
+    return s < 1.f ? static_cast<unsigned>(static_cast<float>(g_h) * s + 0.5f) & ~1u : g_h;
+}
+
 bool WriteMem(void* dst, const void* src, size_t n) {
     DWORD old = 0;
     if (!VirtualProtect(dst, n, PAGE_EXECUTE_READWRITE, &old)) return false;
@@ -144,7 +156,7 @@ void UpdateGraphicsConfigImpl() {
     size_t off = (raw.size() >= 2 && static_cast<uint8_t>(raw[0]) == 0xFF && static_cast<uint8_t>(raw[1]) == 0xFE) ? 2 : 0;
     std::wstring xml(reinterpret_cast<const wchar_t*>(raw.data() + off), (raw.size() - off) / 2);
     const std::wstring before = xml;
-    bool ok = SetTag(xml, L"Resolution-WindowScreenWidth", g_w) && SetTag(xml, L"Resolution-WindowScreenHeight", g_h);
+    bool ok = SetTag(xml, L"Resolution-WindowScreenWidth", GameW()) && SetTag(xml, L"Resolution-WindowScreenHeight", GameH());
     {
         const std::wstring o = L"<ScreenMode>", c = L"</ScreenMode>";
         size_t a = xml.find(o), b = a == std::wstring::npos ? a : xml.find(c, a);
@@ -211,6 +223,14 @@ bool RenderSizeGet(unsigned* w, unsigned* h) {
     return true;
 }
 
+bool RenderSizeGame(unsigned* w, unsigned* h) {
+    ReadSettings();
+    if (!g_w) return false;
+    *w = GameW();
+    *h = GameH();
+    return true;
+}
+
 bool RenderSizeNextLaunch(unsigned* w, unsigned* h, bool* fixed) {
     const std::wstring ini = std::wstring(ModuleDir()) + L"ds3vr.ini";
     const int hs = static_cast<int>(GetPrivateProfileIntW(L"ds3vr", L"RenderHeight", 0, ini.c_str()));
@@ -263,12 +283,12 @@ void RenderSizeEarly() {
         }
     }
     uint8_t* exe = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
-    const uint32_t entry[2] = {g_w, g_h};
+    const uint32_t entry[2] = {GameW(), GameH()};
     const bool okTable = WriteMem(exe + kResTableRva, entry, sizeof(entry));
     UpdateGraphicsConfig();
-    UpdateD3dxHudSize(g_w, g_h);
-    Log("RENDERSIZE: windowed resolution entry 0 set to %ux%u (%s); GraphicsConfig.xml set to it", g_w, g_h,
-        okTable ? "ok" : "FAILED");
+    UpdateD3dxHudSize(GameW(), GameH());
+    Log("RENDERSIZE: windowed resolution entry 0 set to %ux%u (%s); GraphicsConfig.xml set to it%s", GameW(), GameH(),
+        okTable ? "ok" : "FAILED", GameW() != g_w ? " (DLSS upscales it to the headset size)" : "");
 }
 
 namespace {
@@ -376,12 +396,12 @@ void RenderSizeRefreshFromHeadset() {
     g_h = want;
     g_w = newW;
     uint8_t* exe = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
-    const uint32_t entry[2] = {g_w, g_h};
+    const uint32_t entry[2] = {GameW(), GameH()};
     WriteMem(exe + kResTableRva, entry, sizeof(entry));
     UpdateGraphicsConfig();
-    UpdateD3dxHudSize(g_w, g_h);
-    Log("RENDERSIZE: VR runtime now asks for %u per eye: switched to %ux%u after %llu ms", want, g_w, g_h,
-        GetTickCount64() - t0);
+    UpdateD3dxHudSize(GameW(), GameH());
+    Log("RENDERSIZE: VR runtime now asks for %u per eye: switched to %ux%u (game renders %ux%u) after %llu ms", want, g_w, g_h,
+        GameW(), GameH(), GetTickCount64() - t0);
 }
 
 namespace {

@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "camhook.h"
+#include "dlss.h"
 #include "rendersize.h"
 #include "hud.h"
 #include "menu.h"
@@ -422,6 +423,37 @@ void CaptureStereo(ID3D11DeviceContext* ctx, ID3D11Texture2D* src) {
             }
             hs->Release();
         }
+    }
+}
+
+// F1 while DLSS upscales: also save each upscaled half (headset size), named like geo-11's halves.
+void CaptureUpscaled(ID3D11DeviceContext* ctx, ID3D11Texture2D* const* up, UINT w, UINT h) {
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    const int stamp = now.wHour * 10000 + now.wMinute * 100 + now.wSecond;
+    for (int half = 0; half < 2; ++half) {
+        D3D11_TEXTURE2D_DESC d{};
+        up[half]->GetDesc(&d);
+        d.MipLevels = 1;
+        d.ArraySize = 1;
+        d.Usage = D3D11_USAGE_STAGING;
+        d.BindFlags = 0;
+        d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        d.MiscFlags = 0;
+        ID3D11Texture2D* st = nullptr;
+        if (FAILED(g_device->CreateTexture2D(&d, nullptr, &st)) || !st) continue;
+        ctx->CopyResource(st, up[half]);
+        D3D11_MAPPED_SUBRESOURCE m{};
+        if (SUCCEEDED(ctx->Map(st, 0, D3D11_MAP_READ, 0, &m))) {
+            const bool bgra = d.Format == DXGI_FORMAT_B8G8R8A8_UNORM;
+            // geo-11's left half is the right eye (see CaptureStereo).
+            wchar_t name[64];
+            swprintf(name, 64, L"ds3vr_snap_%06d_dlss_%s.bmp", stamp, half == 0 ? L"righteye" : L"lefteye");
+            WriteBmp(std::wstring(ModuleDir()) + name, static_cast<const uint8_t*>(m.pData), m.RowPitch, 0, w, h, bgra);
+            ctx->Unmap(st, 0);
+            Log("snapshot: saved %ls (%ux%u, DLSS upscaled)", name, w, h);
+        }
+        st->Release();
     }
 }
 
@@ -936,7 +968,10 @@ bool TickXR() {
 
     ID3D11Texture2D* src = fs.shouldRender ? SharedStereoTexture() : nullptr;
     if (src && !g_scFailed) {
-        const UINT W = g_kDesc.Width, H = g_kDesc.Height;
+        // DLSS upscaling: the game renders smaller and each half of geo-11's image is upscaled to the headset size.
+        unsigned upW = 0, upH = 0;
+        const bool upscale = DlssUpscaling() && DlssOutputSize(&upW, &upH);
+        const UINT W = upscale ? 2 * upW : g_kDesc.Width, H = upscale ? upH : g_kDesc.Height;
         if (g_sc == XR_NULL_HANDLE || W != g_scW || H != g_scH || g_kDesc.Format != g_scSrcFmt) {
             if (!CreateSwapchain(W, H, g_kDesc.Format)) g_scFailed = true;
         }
@@ -951,7 +986,15 @@ bool TickXR() {
             XRCHECK(xrWaitSwapchainImage_(g_sc, &wi));
             const bool locked = !g_kMutex || SUCCEEDED(g_kMutex->AcquireSync(0, 20));
             if (ctx && locked) {
-                ctx->CopySubresourceRegion(g_scImgs[idx], 0, 0, 0, 0, src, 0, nullptr);
+                if (upscale) {
+                    ID3D11Texture2D* up[2] = {};
+                    if (DlssUpscale(ctx, src, up)) {
+                        for (UINT h = 0; h < 2; ++h) ctx->CopySubresourceRegion(g_scImgs[idx], 0, h * upW, 0, 0, up[h], 0, nullptr);
+                        if (g_capture.load()) CaptureUpscaled(ctx, up, upW, upH);
+                    }
+                } else {
+                    ctx->CopySubresourceRegion(g_scImgs[idx], 0, 0, 0, 0, src, 0, nullptr);
+                }
                 if (g_capture.exchange(false)) CaptureStereo(ctx, src);
             }
             if (g_kMutex && locked) g_kMutex->ReleaseSync(0);

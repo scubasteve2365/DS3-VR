@@ -1,6 +1,6 @@
 # DS3 VR v2: handoff for the DLSS (upscaling) session
 
-Written 2026-10-27 at the end of the DLAA session. Read with `DS3VR/DLAA_FRAME_MAP.md` (how DS3 draws a frame under geo-11) and `DS3VR/V2_ROADMAP.md`.
+Written 2026-10-27 at the end of the DLAA session. Read with `DS3VR/DLAA_FRAME_MAP.md` (how DS3 draws a frame under geo-11) and `DS3VR/V2_ROADMAP.md`. **Latest state: the "Session 2026-10-27 (evening)" section at the end (branch `dlss-wip`).**
 
 ## Where things stand
 
@@ -52,7 +52,7 @@ Copies and motion vectors cost 0.5 to 0.7 ms. Steve saw no quality difference be
 
 - **Object motion:** enemies and the player have camera motion only, so fast movers can trail slightly. DS3's motion blur pass (when on) draws object velocity with `VC_PrevMatrixWVP` / `cbPrevObjMatrix` constant buffers (seen in the Nexus mod's strings); it was not seen in our recording because Motion Blur was off.
 - **Reactive mask** for fire, spells and particles (no motion vectors of their own).
-- **Texture mip bias** (the Nexus mod uses -0.5 with DLAA). More important for DLSS upscaling (see below).
+- **Texture mip bias** for DLAA (the Nexus mod uses -0.5). Test 1 applies a bias in upscaling runs only.
 - The menu still labels it "(test)". No automatic change of the game's AA setting: the installer already sets Anti-aliasing OFF and Motion Blur DISABLE in GraphicsConfig.xml.
 
 ## Performance finding (not caused by the v2 code)
@@ -73,3 +73,38 @@ The DLAA pieces carry over: NGX helper, jitter, camera motion vectors with the g
 **Estimate:** about 2 to 3 sessions like the DLAA one (DLAA took one long day from frame mapping to a working build), if path A works. The DLAA work removed the riskiest parts (jitter through geo-11, motion vectors per eye, NGX on the game's device). New risks: geo-11 sizing its shared texture from the render size (the XR copy must take the small eyes and the large output), and how blurry post-processing looks once upscaled.
 
 **Expected gain on Steve's PC:** limited, because DS3 VR is CPU-bound there (GPU 65 to 70%). DLSS Quality renders about 44% of the pixels, which removes GPU load, not CPU load. The big win is for players with weaker GPUs, or for Steve if he raises the headset resolution further.
+
+## Session 2026-10-27 (evening): DLSS upscaling test 1 (branch `dlss-wip`)
+
+Status: **works, parked.** Code is on branch `dlss-wip` (from `v2` at `6d3e2bb`), not merged into `v2`. Steve is fixing performance problems that came in with v2 builds made *before* the DLSS work, in a separate session; the plan is to rebuild v2 from a fast base and then bring features back, including this branch. Expect to rebase or cherry-pick `dlss-wip` onto whatever `v2` becomes. No helper (`ds3vr_ngx.dll`) change was needed.
+
+Build: md5 `7b8baa02253efa6d7c4e7b5d8b2998fc`, copy in `D:\Projects\DS3VR\switch\dlss-t1\dinput8.dll`. It was deployed to the Game folder for the test (the DLAA build it replaced, `7e3ab3...`, is in `D:\Projects\DS3VR\switch\backup\dinput8-dlaa-before-dlss-t1.dll`). Steve's `ds3vr.ini` now has `DlssMode=2`; older builds ignore that key and write the full headset size back to GraphicsConfig.xml at launch.
+
+### What it does (path A)
+
+- Menu row **DLSS**: Off / DLAA / Quality / Balanced / Performance / Ultra Perf (`ds3vr.ini DlssMode` 0..5; falls back to the old `DlaaMode=1` as DLAA). Off and DLAA switch live. Upscaling modes apply at the next launch; the status line says so. Upscaling buttons grey out once DLSS is known to be unavailable (`[state] DlssAvailable`, written when NGX starts; NGX also starts at Present when any DLSS mode is chosen).
+- At launch (`rendersize.cpp`): `RenderSizeGet` stays the headset size; new `GameW/GameH` / `RenderSizeGame` = headset x NVIDIA ratio (0.667 / 0.58 / 0.5 / 0.333). The game resolution entry, GraphicsConfig.xml and the d3dx.ini HUD resource use the game size. Applied only when `DlssAvailable=1` and `RenderHeight>=0`.
+- Scene point (same place as DLAA): `RunCapture` writes per-eye R32F depth and motion vectors into one of two capture sets (seq ring), with that frame's jitter.
+- Present (`xr.cpp`): the OpenXR swapchain is 2 x headset width. `DlssUpscale` copies each half of geo-11's KATANGA image into an RGBA8 texture, evaluates DLSS (one feature per half; LDR: no IS_HDR; MV_LOW_RES) to headset size, and the halves are copied into the swapchain. With no fresh capture (menus, loading): blank depth/motion and a history reset. F1 also saves `ds3vr_snap_*_dlss_*.bmp` at headset size.
+- Mip bias: deferred-context `PSSetSamplers` gets biased twin samplers (mipmapped, non-comparison only; originals AddRef'd so addresses are never reused), bias = log2(scale) + offset (default -1, `DlssMipBiasOffset`, menu stepper, live). Upscaling runs only.
+- Jitter phases: 16 (Quality, Balanced), 32 (Performance), 72 (Ultra Perf).
+- Test toggles while upscaling: Pairing Same/Previous frame (`DlssPairPrevious`), Halves normal/swapped (`DlssHalvesSwapped`), mip bias stepper. Jitter/Eyes directions kept. The 8x jitter test mode was removed. DLAA code was refactored to share `BeginFrame` / `MotionPass` / `InCleanState` with the capture.
+- Log every 10 s adds: frames upscaled, frames without fresh motion, sampler twins seen, biased binds.
+
+### Test 1 result (Steve, 2026-10-27 17:08 to 17:14)
+
+- Steve: "looks like it's working", but frame rate was very bad. He also feels v2 without DLSS is slower than it should be (see the performance note above), so the slowdown predates this branch.
+- Ran Balanced (2840x2188 to 4894x3772) and Quality (3264x2516 to 4894x3772). Features created fine; NVIDIA's own sizes 2839x2188 / 3263x2515. 0 evaluate failures.
+- **DLSS GPU cost is small:** 1.4 to 1.6 ms per frame for both eyes with CNN (F), 3.2 to 3.8 ms with transformer (K) / driver default. Copies and motion vectors 0.04 ms.
+- **Frame rate:** about 47 to 48 fps in game (XR frames and CAMHOOK export calls both about 475 per 10 s) at 72 Hz, the same in Balanced and Quality, so not GPU-bound. About 55 fps even on loading screens. For comparison: 62 to 65 fps at 4896x3772 with DLAA off in the DLAA session, and a steady 72 fps at 3066x2160 on 2026-10-26.
+- No DLSS-off log of this build survived (only two logs are kept), so test 1 does not show whether this branch adds CPU cost. Check that first when this comes back: same spot, Off vs Quality, compare XR frame counts.
+- Oddity: about 97% of main-camera uploads are counted as "another view" (DLAA session: about 1 in 5). Cheap, but the camera-upload pattern changed; check it.
+- Steve tried the Pairing, Halves and mip bias toggles; no verdict recorded on which looked best. Defaults in the ini: pairing Same, halves normal, offset -1.
+
+### Next, when DLSS comes back
+
+1. Rebase `dlss-wip` onto the fixed `v2`. Conflicts are likely only in `menu.cpp`, `xr.cpp`, `rendersize.cpp` if those changed.
+2. Measure Off vs DLAA vs Quality in the same spot on the fast base.
+3. Get Steve's verdict on Pairing / Halves / mip bias; then drop the test toggles or hide them under Advanced.
+4. Look at the "another view" count.
+5. Later: object motion, reactive mask, release packaging (ship `ds3vr_ngx.dll` and `nvngx_dlss.dll`, NVIDIA credit).
