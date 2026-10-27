@@ -281,6 +281,19 @@ void BuildUi() {
             if (ImGui::Button(es > 0.f ? "Eyes +" : "Eyes -")) DlaaSetSigns(js, -es);
             ImGui::SameLine();
             ImGui::TextDisabled("try each if it looks soft or flickers");
+            const int pr = DlaaPreset();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("  DLAA model");
+            ImGui::SameLine(430.f);
+            const int presets[3] = {0, 11, 6};
+            const char* pnames[3] = {"Driver default", "Transformer (K)", "CNN (F, faster)"};
+            for (int i = 0; i < 3; ++i) {
+                if (i) ImGui::SameLine();
+                const bool sel = pr == presets[i];
+                if (sel) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
+                if (ImGui::Button(pnames[i]) && !sel) DlaaSetPreset(presets[i]);
+                if (sel) ImGui::PopStyleColor();
+            }
         }
     }
     ImGui::Spacing();

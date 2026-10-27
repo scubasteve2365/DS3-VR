@@ -145,7 +145,9 @@ std::atomic<int> g_mode{0};          // 0 off, 1 DLAA, 2 jitter test
 std::atomic<bool> g_ngxFailed{false};  // NGX or DLSS could not start: DLAA stays off this session
 std::atomic<bool> g_ready{false};      // DLAA features exist and run
 float g_jitterSign = 1.f;              // ds3vr.ini DlaaJitterSign (flip if standing still looks soft)
-float g_eyeSign = 1.f;                 // ds3vr.ini DlaaEyeSign: geo-11's shift sign for slice 0 (+1) or slice 1
+float g_eyeSign = 1.f;
+std::atomic<int> g_preset{0};          // ds3vr.ini DlaaPreset: 0 driver default, 6 CNN (preset F, faster), 11 transformer (preset K)
+std::atomic<bool> g_presetChanged{false};                 // ds3vr.ini DlaaEyeSign: geo-11's shift sign for slice 0 (+1) or slice 1
 constexpr float kTestScale = 8.f;      // jitter test: offsets made 8x larger so the wobble is easy to see
 
 bool Jittering() {
@@ -220,7 +222,15 @@ struct Camera {
     bool valid = false;
 };
 std::mutex g_camMutex;
-Camera g_camLatest;
+struct Candidate {
+    Camera cam;
+    unsigned uploads = 0;
+};
+constexpr int kMaxCand = 8;
+Candidate g_cand[kMaxCand];  // this frame's distinct full-size cameras
+int g_candCount = 0;
+unsigned g_candFrame = ~0u;
+Camera g_camLatest;          // the one DLAA used last (when a frame has no upload of its own)
 std::atomic<unsigned> g_statMain{0}, g_statHalf{0}, g_statOther{0}, g_statOtherView{0}, g_statStale{0};
 
 // The game is writing camera constants into memory p (about to be uploaded): note the main camera, jitter.
@@ -247,18 +257,31 @@ void OnCameraUpload(float* p) {
     if (main) {
         g_statMain.fetch_add(1, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(g_camMutex);
-        // Same frame as the last main camera, but a different view? (a second camera at full size)
-        if (g_camLatest.valid && g_camLatest.frame == frame) {
-            float diff = 0.f;
-            for (int k = 0; k < 16; ++k) diff = std::fmax(diff, std::fabs(g_camLatest.vp[k] - p[24 * 4 + k]));
-            if (diff > 1e-4f) g_statOtherView.fetch_add(1, std::memory_order_relaxed);
+        // Several full-size cameras can be uploaded in one frame (about 1 in 5 uploads is another view).
+        // Count each distinct one; DLAA uses the one the frame used most (the main scene camera).
+        if (g_candFrame != frame) {
+            g_candFrame = frame;
+            g_candCount = 0;
         }
-        memcpy(g_camLatest.vp, p + 24 * 4, sizeof(g_camLatest.vp));
-        memcpy(g_camLatest.cam, p + 3 * 4, sizeof(g_camLatest.cam));
-        g_camLatest.jx = jx;
-        g_camLatest.jy = jy;
-        g_camLatest.frame = frame;
-        g_camLatest.valid = true;
+        int hit = -1;
+        for (int i = 0; i < g_candCount && hit < 0; ++i) {
+            float diff = 0.f;
+            for (int k = 0; k < 16; ++k) diff = std::fmax(diff, std::fabs(g_cand[i].cam.vp[k] - p[24 * 4 + k]));
+            if (diff <= 1e-4f) hit = i;
+        }
+        if (hit < 0 && g_candCount < kMaxCand) {
+            hit = g_candCount++;
+            Camera& c = g_cand[hit].cam;
+            memcpy(c.vp, p + 24 * 4, sizeof(c.vp));
+            memcpy(c.cam, p + 3 * 4, sizeof(c.cam));
+            c.jx = jx;
+            c.jy = jy;
+            c.frame = frame;
+            c.valid = true;
+            g_cand[hit].uploads = 0;
+        }
+        if (hit > 0) g_statOtherView.fetch_add(1, std::memory_order_relaxed);
+        if (hit >= 0) ++g_cand[hit].uploads;
     } else {
         g_statHalf.fetch_add(1, std::memory_order_relaxed);
     }
@@ -412,6 +435,41 @@ void main(uint3 id : SV_DispatchThreadID) {
 }
 )";
 
+// GPU time of the DLAA work, from timestamp queries read a few frames later (never waits).
+struct GpuTimer {
+    static constexpr int kRing = 6, kStamps = 5;  // start, eye 0 inputs, eye 0 DLSS, eye 1 inputs, eye 1 DLSS + copy back
+    ID3D11Query* disjoint[kRing] = {};
+    ID3D11Query* ts[kRing][kStamps] = {};
+    bool pending[kRing] = {};
+    int next = 0;
+    double sumTotal = 0.0, sumDlss = 0.0;
+    unsigned samples = 0;
+};
+GpuTimer g_t;
+
+void TimerStamp(ID3D11DeviceContext* c, int slot, int i) {
+    if (g_t.ts[slot][i]) c->End(g_t.ts[slot][i]);
+}
+
+void TimerCollect(ID3D11DeviceContext* c) {
+    for (int k = 0; k < GpuTimer::kRing; ++k) {
+        if (!g_t.pending[k]) continue;
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
+        if (c->GetData(g_t.disjoint[k], &dj, sizeof(dj), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) continue;
+        UINT64 t[GpuTimer::kStamps] = {};
+        bool all = true;
+        for (int i = 0; i < GpuTimer::kStamps && all; ++i)
+            all = c->GetData(g_t.ts[k][i], &t[i], sizeof(UINT64), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK;
+        if (!all) continue;
+        g_t.pending[k] = false;
+        if (dj.Disjoint || !dj.Frequency) continue;
+        const double f = 1000.0 / static_cast<double>(dj.Frequency);
+        g_t.sumTotal += static_cast<double>(t[4] - t[0]) * f;
+        g_t.sumDlss += static_cast<double>((t[2] - t[1]) + (t[4] - t[3])) * f;
+        ++g_t.samples;
+    }
+}
+
 struct MvParams {
     float inv[16];
     float prv[16];
@@ -536,6 +594,12 @@ bool Start(ID3D11DeviceContext* c) {
         SetStatus("failed (see ds3vr.log)");
         return false;
     }
+    for (int k = 0; k < GpuTimer::kRing; ++k) {
+        D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
+        g_d.dev->CreateQuery(&qd, &g_t.disjoint[k]);
+        qd.Query = D3D11_QUERY_TIMESTAMP;
+        for (int i = 0; i < GpuTimer::kStamps; ++i) g_d.dev->CreateQuery(&qd, &g_t.ts[k][i]);
+    }
     QueryPerformanceCounter(&g_d.lastTime);
     Log("DLAA: ready (jitter sign %+.0f, eye sign %+.0f)", g_jitterSign, g_eyeSign);
     return true;
@@ -551,7 +615,8 @@ bool MakeTargets(unsigned w, unsigned h, ID3D11DeviceContext* c) {
                  SUCCEEDED(g_d.dev->CreateUnorderedAccessView(g_d.motion, nullptr, &g_d.motionUav));
     for (int e = 0; ok && e < 2; ++e) {
         const int r = g_ngx.CreateDlss(c, w, h, w, h, DS3VR_NGX_DLAA,
-                                       DS3VR_NGX_FLAG_IS_HDR | DS3VR_NGX_FLAG_MV_LOW_RES | DS3VR_NGX_FLAG_AUTO_EXPOSURE, 0, &g_d.feature[e]);
+                                       DS3VR_NGX_FLAG_IS_HDR | DS3VR_NGX_FLAG_MV_LOW_RES | DS3VR_NGX_FLAG_AUTO_EXPOSURE, g_preset.load(),
+                                       &g_d.feature[e]);
         if (r != 1) {
             Log("DLAA: creating the DLSS feature for eye %d (%ux%u) failed: %s", e, w, h, g_ngx.ResultString(r));
             ok = false;
@@ -564,7 +629,7 @@ bool MakeTargets(unsigned w, unsigned h, ID3D11DeviceContext* c) {
     g_d.w = w;
     g_d.h = h;
     g_d.reset = true;
-    Log("DLAA: two DLAA features created, %ux%u per eye", w, h);
+    Log("DLAA: two DLAA features created, %ux%u per eye, preset %d (0 = driver default, 6 = CNN F, 11 = transformer K)", w, h, g_preset.load());
     return true;
 }
 
@@ -619,13 +684,18 @@ void RunDlaa(ID3D11DeviceContext* c) {
     Camera cur;
     {
         std::lock_guard<std::mutex> lock(g_camMutex);
+        int best = -1;
+        if (g_candFrame == g_frame.load())
+            for (int i = 0; i < g_candCount; ++i)
+                if (best < 0 || g_cand[i].uploads > g_cand[best].uploads) best = i;
+        if (best >= 0) g_camLatest = g_cand[best].cam;
         cur = g_camLatest;
     }
     if (cur.valid && cur.frame != g_frame.load()) g_statStale.fetch_add(1, std::memory_order_relaxed);
     D3D11_TEXTURE2D_DESC sd{};
     scene->GetDesc(&sd);
     bool ok = cur.valid;
-    if (ok && (g_d.w != sd.Width || g_d.h != sd.Height)) ok = MakeTargets(sd.Width, sd.Height, c);
+    if (ok && (g_d.w != sd.Width || g_d.h != sd.Height || g_presetChanged.exchange(false))) ok = MakeTargets(sd.Width, sd.Height, c);
     if (ok && g_d.depthSrvOf != depthTex) {
         SafeRelease(g_d.depthSrv);
         D3D11_SHADER_RESOURCE_VIEW_DESC vd{};
@@ -686,6 +756,13 @@ void RunDlaa(ID3D11DeviceContext* c) {
     ID3DDeviceContextState* saved = nullptr;
     g_busy = true;
     c1->SwapDeviceContextState(g_d.state, &saved);
+    TimerCollect(c);
+    const int slot = g_t.next;
+    const bool timing = g_t.disjoint[slot] && !g_t.pending[slot];
+    if (timing) {
+        c->Begin(g_t.disjoint[slot]);
+        TimerStamp(c, slot, 0);
+    }
     for (UINT e = 0; e < 2; ++e) {
         const UINT sub = D3D11CalcSubresource(0, e, sd.MipLevels);
         c->CopySubresourceRegion(g_d.color, 0, 0, 0, 0, scene, sub, nullptr);
@@ -707,6 +784,7 @@ void RunDlaa(ID3D11DeviceContext* c) {
         c->CSSetUnorderedAccessViews(0, 2, nullUav, nullptr);
         c->CSSetShader(nullptr, nullptr, 0);
 
+        if (timing) TimerStamp(c, slot, e == 0 ? 1 : 3);
         Ds3vrNgxEval ev{};
         ev.color = g_d.color;
         ev.output = g_d.out;
@@ -728,6 +806,12 @@ void RunDlaa(ID3D11DeviceContext* c) {
             if (r != g_lastEvalResult) Log("DLAA: DLSS evaluate failed for eye %u: %s", e, g_ngx.ResultString(r));
         }
         g_lastEvalResult = r;
+        if (timing) TimerStamp(c, slot, e == 0 ? 2 : 4);
+    }
+    if (timing) {
+        c->End(g_t.disjoint[slot]);
+        g_t.pending[slot] = true;
+        g_t.next = (slot + 1) % GpuTimer::kRing;
     }
     c1->SwapDeviceContextState(saved, nullptr);
     g_busy = false;
@@ -770,6 +854,17 @@ void DlaaSetSigns(float jitter, float eye) {
     WritePrivateProfileStringW(L"ds3vr", L"DlaaJitterSign", g_jitterSign < 0.f ? L"-1" : L"1", Ini().c_str());
     WritePrivateProfileStringW(L"ds3vr", L"DlaaEyeSign", g_eyeSign < 0.f ? L"-1" : L"1", Ini().c_str());
     Log("DLAA: jitter sign %+.0f, eye sign %+.0f", g_jitterSign, g_eyeSign);
+}
+
+int DlaaPreset() { return g_preset.load(); }
+void DlaaSetPreset(int preset) {
+    g_preset = preset;
+    g_presetChanged = true;
+    g_wantReset = true;
+    wchar_t v[8];
+    swprintf(v, 8, L"%d", preset);
+    WritePrivateProfileStringW(L"ds3vr", L"DlaaPreset", v, Ini().c_str());
+    Log("DLAA: preset %d (0 = driver default, 6 = CNN F, 11 = transformer K)", preset);
 }
 
 bool DlaaBusy() { return g_busy.load(std::memory_order_relaxed); }
@@ -857,6 +952,7 @@ void DlssOnPresent(ID3D11Device* device) {
         if (g_mode < 0 || g_mode > 2) g_mode = 0;
         g_jitterSign = GetPrivateProfileIntW(L"ds3vr", L"DlaaJitterSign", 1, Ini().c_str()) < 0 ? -1.f : 1.f;
         g_eyeSign = GetPrivateProfileIntW(L"ds3vr", L"DlaaEyeSign", 1, Ini().c_str()) < 0 ? -1.f : 1.f;
+        g_preset = GetPrivateProfileIntW(L"ds3vr", L"DlaaPreset", 0, Ini().c_str());
         InstallHooks(device);
         Log("DLAA: mode at start %d (0 off, 1 DLAA, 2 jitter test)", g_mode.load());
     }
@@ -869,6 +965,12 @@ void DlssOnPresent(ID3D11Device* device) {
                 "camera from another jitter phase %u; %d camera buffers",
                 g_statMain.exchange(0), g_statOtherView.exchange(0), g_statHalf.exchange(0), g_statOther.exchange(0), g_statEvals.exchange(0),
                 g_statFail.exchange(0), g_statStale.exchange(0), g_cbCount.load());
+        if (g_t.samples) {
+            Log("DLAA: GPU time per frame (both eyes): %.2f ms in all, of which DLSS %.2f ms, copies and motion vectors %.2f ms (%u frames timed)",
+                g_t.sumTotal / g_t.samples, g_t.sumDlss / g_t.samples, (g_t.sumTotal - g_t.sumDlss) / g_t.samples, g_t.samples);
+            g_t.sumTotal = g_t.sumDlss = 0.0;
+            g_t.samples = 0;
+        }
         nextStat = now + 10000;
     }
     {

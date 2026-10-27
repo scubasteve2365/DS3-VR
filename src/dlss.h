@@ -29,6 +29,8 @@ const char* DlaaStatus();     // one short line for the menu
 float DlaaJitterSign();       // +1 / -1: direction of the jitter told to DLSS
 float DlaaEyeSign();          // +1 / -1: which slice geo-11 shifts right
 void DlaaSetSigns(float jitter, float eye);  // from the menu: applied now (history reset) and saved
+int DlaaPreset();             // DLSS model: 0 driver default, 6 CNN (preset F), 11 transformer (preset K)
+void DlaaSetPreset(int preset);  // from the menu: the DLSS features are remade on the next frame
 
 // Called from the context hooks in drawlog.cpp.
 void DlaaOnSetRenderTargets(unsigned n, ID3D11RenderTargetView* const* rtv, ID3D11DepthStencilView* dsv);  // any context
