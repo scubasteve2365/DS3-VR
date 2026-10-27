@@ -20,8 +20,10 @@ void RenderSizePatchLetterbox();
 // since the last run (works when it answers before the game reads its settings). Blocking; run on a
 // thread of its own.
 void RenderSizeRefreshFromHeadset();
-// The configured size, or false if not in use.
+// The configured size (the headset size per eye), or false if not in use.
 bool RenderSizeGet(unsigned* w, unsigned* h);
+// The size the game renders at this run: the headset size, or smaller when DLSS upscales (dlss.h).
+bool RenderSizeGame(unsigned* w, unsigned* h);
 // The size the next launch will use (from ds3vr.ini as it stands now), or false if the mod leaves the
 // game's resolution alone (RenderHeight=-1).
 bool RenderSizeNextLaunch(unsigned* w, unsigned* h, bool* fixed);

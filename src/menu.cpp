@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 #include "MinHook.h"
@@ -211,7 +212,7 @@ void BuildUi() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    char v[96];
+    char v[160];
     // World scale
     const float ws = WorldScaleGet();
     const char* note = ws == 1.f ? "  (life size)" : ws == 0.25f ? "  (largest)" : ws == 10.f ? "  (smallest)" : "";
@@ -226,34 +227,44 @@ void BuildUi() {
         if (ImGui::Button(lock ? "On  (stick does not tilt the view)" : "Off  (free camera)", ImVec2(0.f, 0.f))) CamHookSetHorizonLock(!lock);
         if (lock) ImGui::PopStyleColor();
     }
-    // DLAA (test build): off, on, or the jitter test (image wobbles, DLAA off)
+    // DLSS: Off and DLAA switch now; the upscaling modes change the render size, so they apply at the next launch.
     {
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("DLAA  (test)");
-        ImGui::SameLine(430.f);
-        const int m = DlaaMode();
-        const char* names[3] = {"Off", "On", "Jitter test"};
-        for (int i = 0; i < 3; ++i) {
-            if (i) ImGui::SameLine();
-            const bool sel = m == i;
+        const int saved = DlssModeSaved(), live = DlssModeNow();
+        const bool noDlss = DlssAvailable() == 0;
+        auto modeButton = [&](int m, const char* label) {
+            const bool sel = saved == m;
             if (sel) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
-            if (ImGui::Button(names[i]) && !sel) DlaaSetMode(i);
+            if (noDlss && m != kDlssOff) ImGui::BeginDisabled();
+            if (ImGui::Button(label) && !sel) DlssSetMode(m);
+            if (noDlss && m != kDlssOff) ImGui::EndDisabled();
             if (sel) ImGui::PopStyleColor();
-        }
+        };
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("DLSS");
+        ImGui::SameLine(430.f);
+        modeButton(kDlssOff, "Off");
+        ImGui::SameLine();
+        modeButton(kDlssDlaa, "DLAA");
+        ImGui::SameLine();
+        modeButton(kDlssQuality, "Quality");
+        ImGui::SetCursorPosX(430.f);
+        modeButton(kDlssBalanced, "Balanced");
+        ImGui::SameLine();
+        modeButton(kDlssPerformance, "Performance");
+        ImGui::SameLine();
+        modeButton(kDlssUltraPerformance, "Ultra Perf");
         ImGui::TextDisabled("  Status");
         ImGui::SameLine(430.f);
-        ImGui::TextDisabled("%s", DlaaStatus());
-        if (m == 1) {
-            const float js = DlaaJitterSign(), es = DlaaEyeSign();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("  DLAA directions");
+        ImGui::TextDisabled("%s", DlssStatus());
+        if (saved >= kDlssQuality && saved != live) {
+            ImGui::TextDisabled("  ");
             ImGui::SameLine(430.f);
-            if (ImGui::Button(js > 0.f ? "Jitter +" : "Jitter -")) DlaaSetSigns(-js, es);
-            ImGui::SameLine();
-            if (ImGui::Button(es > 0.f ? "Eyes +" : "Eyes -")) DlaaSetSigns(js, -es);
+            ImGui::TextDisabled("Upscaling modes apply when you restart the game.");
+        }
+        if (saved != kDlssOff || live != kDlssOff) {
             const int pr = DlaaPreset();
             ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("  DLAA model");
+            ImGui::TextUnformatted("  DLSS model");
             ImGui::SameLine(430.f);
             const int presets[3] = {6, 11, 0};
             const char* pnames[3] = {"CNN  (faster)", "Transformer", "Driver default"};
@@ -264,6 +275,27 @@ void BuildUi() {
                 if (ImGui::Button(pnames[i]) && !sel) DlaaSetPreset(presets[i]);
                 if (sel) ImGui::PopStyleColor();
             }
+        }
+        if (live != kDlssOff) {
+            const float js = DlaaJitterSign(), es = DlaaEyeSign();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("  Directions  (test)");
+            ImGui::SameLine(430.f);
+            if (ImGui::Button(js > 0.f ? "Jitter +" : "Jitter -")) DlaaSetSigns(-js, es);
+            ImGui::SameLine();
+            if (ImGui::Button(es > 0.f ? "Eyes +" : "Eyes -")) DlaaSetSigns(js, -es);
+        }
+        if (live >= kDlssQuality) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("  Pairing  (test)");
+            ImGui::SameLine(430.f);
+            const bool prev = DlssPairPrevious();
+            if (ImGui::Button(prev ? "Previous frame" : "Same frame")) DlssSetPairPrevious(!prev);
+            ImGui::SameLine();
+            const bool sw = DlssHalvesSwapped();
+            if (ImGui::Button(sw ? "Halves swapped" : "Halves normal")) DlssSetHalvesSwapped(!sw);
+            snprintf(v, sizeof(v), "%+.2f  (offset %+.2f)", DlssMipBias(), DlssMipBiasOffset());
+            if (const int d = Stepper("  Texture mip bias", v, "mb")) DlssStepMipBiasOffset(d);
         }
     }
     ImGui::Spacing();
@@ -308,9 +340,16 @@ void BuildUi() {
         ImGui::TextUnformatted("Resolution per eye");
         if (haveNow) snprintf(v, sizeof(v), "%u x %u", ew, eh);
         else snprintf(v, sizeof(v), "-");
-        ImGui::TextDisabled("  Game now");
+        ImGui::TextDisabled(DlssUpscaling() ? "  Game renders" : "  Game now");
         ImGui::SameLine(430.f);
         ImGui::TextUnformatted(v);
+        unsigned uw = 0, uh = 0;
+        if (DlssUpscaling() && DlssOutputSize(&uw, &uh)) {
+            snprintf(v, sizeof(v), "%u x %u  (DLSS %s)", uw, uh, DlssModeName(DlssModeNow()));
+            ImGui::TextDisabled("  Headset gets");
+            ImGui::SameLine(430.f);
+            ImGui::TextUnformatted(v);
+        }
         if (ask) snprintf(v, sizeof(v), "%u x %u", askW, askH);
         else snprintf(v, sizeof(v), "-");
         ImGui::TextDisabled("  VR runtime asked for");
@@ -319,6 +358,13 @@ void BuildUi() {
         if (haveNext) {
             const bool same = haveCfg && nw == cw && nh == ch;
             snprintf(v, sizeof(v), "%u x %u%s%s", nw, nh, fixed ? "  (fixed in ds3vr.ini)" : "", same ? "  (same as now)" : "  (restart the game to apply)");
+            const int sm = DlssModeSaved();
+            if (sm >= kDlssQuality && DlssAvailable() == 1) {
+                const size_t n = strlen(v);
+                const float sc = DlssModeScale(sm);
+                snprintf(v + n, sizeof(v) - n, ", renders %u x %u", static_cast<unsigned>(static_cast<float>(nw) * sc + 0.5f) & ~1u,
+                         static_cast<unsigned>(static_cast<float>(nh) * sc + 0.5f) & ~1u);
+            }
         } else {
             snprintf(v, sizeof(v), "game's own setting (RenderHeight=-1)");
         }
