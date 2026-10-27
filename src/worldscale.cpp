@@ -6,7 +6,6 @@
 #include <cstdio>
 #include <string>
 
-#include "firstperson.h"
 #include "log.h"
 
 namespace ds3vr {
@@ -41,7 +40,6 @@ int g_heldVk = 0;          // key currently held down for geo-11
 int g_frames = 0;          // frames left before releasing it
 float g_pending = 0.f;     // a change asked for while a key was held, applied once it is released
 bool g_pendingSave = false;
-bool g_firstPerson = false;  // first person: the scale is 1.0 and changes are not saved over the third-person one
 
 std::wstring Path(const wchar_t* name) { return std::wstring(ModuleDir()) + name; }
 
@@ -192,15 +190,13 @@ void Apply(float scale, bool save) {
         WritePrivateProfileStringW(L"ds3vr", L"WorldScale", v, Path(L"ds3vr.ini").c_str());
     }
     Log("world scale %.2f (geo-11 convergence %s%s)", scale, Conv(scale).c_str(),
-        save ? ", saved" : g_firstPerson ? ", first person: not saved" : "");
+        save ? ", saved" : "");
 }
 
 } // namespace
 
 void WorldScaleEarly() {
-    // A run that starts in first person starts at life size; the saved third-person scale is kept.
-    g_firstPerson = FirstPersonAvailable() && FirstPersonWanted();
-    g_scale = g_firstPerson ? kLifeSize : SavedScale();
+    g_scale = SavedScale();
     const std::string sepStr = std::to_string(kSepBase);
     std::string dm;
     bool ok = false;
@@ -238,8 +234,8 @@ void WorldScaleEarly() {
         keysOk = UpdateKeyBlock(dx);
         if (keysOk && dx != before) keysOk = ReplaceFile(Path(L"d3dx.ini"), dx);
     }
-    Log("WORLDSCALE: starting at %.2f%s (geo-11 separation %s, convergence %s): d3dxdm.ini %s, d3dx.ini steps %s",
-        g_scale, g_firstPerson ? " (first person; third-person scale kept)" : "", sepStr.c_str(), Conv(g_scale).c_str(),
+    Log("WORLDSCALE: starting at %.2f (geo-11 separation %s, convergence %s): d3dxdm.ini %s, d3dx.ini steps %s",
+        g_scale, sepStr.c_str(), Conv(g_scale).c_str(),
         ok ? "ok" : "NOT updated", keysOk ? "ok" : "NOT updated (the world-scale block was not found)");
 }
 
@@ -247,13 +243,7 @@ float WorldScaleGet() { return g_scale; }
 
 bool WorldScaleBusy() { return g_heldVk != 0; }
 
-void WorldScaleSet(float scale) { Apply(scale, !g_firstPerson); }
-
-void WorldScaleFirstPerson(bool on) {
-    if (on == g_firstPerson) return;
-    g_firstPerson = on;
-    Apply(on ? kLifeSize : SavedScale(), false);
-}
+void WorldScaleSet(float scale) { Apply(scale, true); }
 
 void WorldScaleStep(int delta) {
     const int cur = StepIndex(g_scale);

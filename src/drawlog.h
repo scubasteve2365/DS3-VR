@@ -14,6 +14,8 @@ namespace ds3vr {
 
 void DrawLogOnPresent(ID3D11Device* realDevice);  // call once per frame from the Present hook
 void DrawLogRequest();                            // F2: record the next frame
+// Hook DS3's deferred contexts (worker threads) now, if not done yet. Used by F2 and DLAA.
+void DrawLogEnsureDeferredHooks(ID3D11Device* dev);
 // geo-11's per-eye shift (|StereoParams.x|) and convergence as last read; false until read once.
 bool StereoParamsGet(float* sep, float* conv);
 

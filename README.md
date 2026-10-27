@@ -116,7 +116,7 @@ game's `Game` folder. `dist` holds the batch files, the player README and the de
 | `installer` | The patcher: unpacks and checks Helifax's fix, patches it for VR, backs up and restores |
 | `dist` | Files shipped as they are: install and uninstall batch files, player README, default settings |
 | `tools` | A patch test that runs the installer's patches on Helifax's files outside Windows |
-| `third_party` | Dear ImGui, MinHook, the OpenXR headers, EB Garamond (menu font, third_party/ebgaramond), 7-Zip's C decoder, and First Person Souls with asmjit, mem, MCF and mINI (third_party/ds3fps, changes in its PORTING.md) |
+| `third_party` | Dear ImGui, MinHook, the OpenXR headers, EB Garamond (menu font, third_party/ebgaramond), and 7-Zip's C decoder |
 
 No files from geo-11 or Helifax's fix are in this repository: their licences do not allow
 redistribution. The install step only patches the copy each player downloads.
@@ -126,7 +126,6 @@ redistribution. The install step only patches the copy each player downloads.
 - **geo-11** 3D driver: davegl1234 and the HelixMod team
 - **Dark Souls 3 geo-11 fix:** Helifax, updated by masterotaku. Please support them; this mod is built on their work.
 - **3Dmigoto:** bo3b, Flugan and DarkStarSword
-- **First person:** First Person Souls by Dasaav (https://github.com/Dasaav-dsv/ds3fps, MIT), built into DS3 VR
 - Ideas from Luke Ross's R.E.A.L. VR and praydog's UEVR
 - Third-party code: see [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt)
 

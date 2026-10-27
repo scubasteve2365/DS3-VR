@@ -98,7 +98,6 @@ float g_refYaw = 0.f;
 Vec3 g_refP{0, 0, 0};
 std::atomic<bool> g_recenterReq{true};
 std::atomic<bool> g_headTrack{true};
-std::atomic<float> g_headYaw{0.f};    // head yaw relative to the game camera (radians, + = turned left)
 std::atomic<bool> g_scaleHead{true};  // ds3vr.ini ScaleHeadMovement
 std::atomic<bool> g_horizonLock{false};  // ds3vr.ini HorizonLock (VR menu): off = the stick tilts the view as in the flat game
 float g_pullback = 0.f;  // ds3vr.ini CameraPullback: extra metres behind the game's camera
@@ -218,12 +217,6 @@ void ExportDetour(void* self, void* out) {
                 for (int a = 0; a < 3; ++a) cam[12 + a] -= g_pullback * cam[8 + a];  // back along the forward row
             if (g_horizonLock.load(std::memory_order_relaxed)) LevelCamera(cam);
             ApplyHead(cam, q, p);
-            {
-                float y = YawOf(q) - g_refYaw;  // the turn ApplyHead just added to the game camera
-                if (y > 3.14159265f) y -= 6.2831853f;
-                if (y < -3.14159265f) y += 6.2831853f;
-                g_headYaw.store(y, std::memory_order_relaxed);
-            }
             const uint64_t seq = g_appliedSeq.load(std::memory_order_relaxed) + 1;
             Applied& a = g_applied[seq % kRing];
             a.q = q;
@@ -392,8 +385,6 @@ bool CamHookMarkerParams(int lag, float out[16]) {
     memcpy(out, a.marker, sizeof(a.marker));
     return true;
 }
-
-float CamHookHeadYaw() { return g_headTrack.load(std::memory_order_relaxed) ? g_headYaw.load(std::memory_order_relaxed) : 0.f; }
 
 bool CamHookGetHorizonLock() { return g_horizonLock.load(); }
 

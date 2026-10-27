@@ -37,8 +37,4 @@ void CamHookSetScaleHead(bool on);  // from the menu (developer section): applie
 bool CamHookGetHorizonLock();
 void CamHookSetHorizonLock(bool on);
 
-// How far the head is turned left (+) or right (-) of the game camera, in radians, as last applied to the
-// view. First person uses it to make the left stick move where you look.
-float CamHookHeadYaw();
-
 } // namespace ds3vr

@@ -682,6 +682,16 @@ void Install(ID3D11Device* dev) {
     Log("context hooks: %d of 13 on %p (Draw lives in %ls). F2 records one frame to ds3vr_draws_N.txt", ok,
         static_cast<void*>(ctx), mod);
 
+    Log("context hooks: deferred contexts are hooked when needed (F2 recording or DLAA)");
+}
+
+// DS3's deferred contexts (worker threads): hooked only when a feature needs them, so a normal run
+// does not pass every worker-thread draw through this file.
+bool g_deferredHooked = false;
+void InstallDeferred(ID3D11Device* dev) {
+    if (g_deferredHooked || !dev || !g_ctx) return;
+    g_deferredHooked = true;
+    void** vt = *reinterpret_cast<void***>(g_ctx);
     // DS3's deferred contexts (it records parts of the frame on worker threads): every deferred context of
     // a device shares one vtable, so a throwaway one shows where those functions are. A function the
     // immediate context also uses is already hooked above, and that hook records any context.
@@ -746,8 +756,11 @@ void CtxSetRenderTargetsRaw(ID3D11DeviceContext* c, unsigned n, ID3D11RenderTarg
     if (o_OMSetRT) o_OMSetRT(c, n, rtv, dsv);
 }
 
+void DrawLogEnsureDeferredHooks(ID3D11Device* dev) { InstallDeferred(dev); }
+
 void DrawLogOnPresent(ID3D11Device* dev) {
     if (!g_installed && dev) Install(dev);
+    if (g_request.load(std::memory_order_relaxed) && !g_deferredHooked) InstallDeferred(dev);  // F2: record worker threads too
     if (g_state != 2 && !g_request.load(std::memory_order_relaxed)) return;  // the usual case: nothing to do, no lock
     std::lock_guard<std::recursive_mutex> lock(g_recMutex);  // worker threads may be recording deferred draws
     if (g_state == 2) {

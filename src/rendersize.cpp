@@ -384,36 +384,6 @@ void RenderSizeRefreshFromHeadset() {
         GetTickCount64() - t0);
 }
 
-namespace {
-std::atomic<int> g_checkState{0};  // 0 = not asked yet, 1 = asking, 2 = answered, 3 = no answer
-std::atomic<unsigned> g_checkW{0}, g_checkH{0};
-} // namespace
-
-void RenderSizeCheckSteamVR() {
-    if (g_checkState.load() == 1) return;  // already asking
-    g_checkState.store(1);
-    HANDLE t = CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
-        unsigned h = 0, w = 0;
-        if (QueryHeightInHelper(&h, &w) && h >= 480 && h <= 8192) {
-            g_checkW.store(w);
-            g_checkH.store(h);
-            RenderSizeRememberHeadsetHeight(h);
-            g_checkState.store(2);
-        } else {
-            g_checkState.store(3);
-        }
-        return 0;
-    }, nullptr, 0, nullptr);
-    if (t) CloseHandle(t);
-    else g_checkState.store(3);
-}
-
-int RenderSizeSteamVRAnswer(unsigned* w, unsigned* h) {
-    *w = g_checkW.load();
-    *h = g_checkH.load();
-    return g_checkState.load();
-}
-
 void RenderSizePatchLetterbox() {
     ReadSettings();
     if (!g_w) return;

@@ -13,9 +13,6 @@ void WorldScaleEarly();          // from DllMain, before geo-11 loads
 float WorldScaleGet();           // 0.25 to 10.0
 void WorldScaleSet(float scale); // from the menu: snapped to the nearest step, applied through geo-11, saved
 void WorldScaleStep(int delta);  // from the menu: one step up (+1) or down (-1)
-// First person on: life size (1.0), and menu changes are not saved over the third-person scale.
-// Off: back to the saved third-person scale.
-void WorldScaleFirstPerson(bool on);
 void WorldScaleTick();           // every frame: releases the key pressed for geo-11
 bool WorldScaleBusy();           // a change is being applied
 

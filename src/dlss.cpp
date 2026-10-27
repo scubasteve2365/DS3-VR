@@ -870,6 +870,7 @@ void DlaaSetPreset(int preset) {
 bool DlaaBusy() { return g_busy.load(std::memory_order_relaxed); }
 
 void DlaaOnSetRenderTargets(unsigned n, ID3D11RenderTargetView* const* rtv, ID3D11DepthStencilView* dsv) {
+    if (g_mode.load(std::memory_order_relaxed) == 0) return;
     if (!n || n > 8 || !rtv || !rtv[0] || !dsv) return;
     if (g_lastRtv.load(std::memory_order_relaxed) == rtv[0] && g_lastDsv.load(std::memory_order_relaxed) == dsv) return;
     g_lastRtv.store(rtv[0], std::memory_order_relaxed);
@@ -953,8 +954,15 @@ void DlssOnPresent(ID3D11Device* device) {
         g_jitterSign = GetPrivateProfileIntW(L"ds3vr", L"DlaaJitterSign", 1, Ini().c_str()) < 0 ? -1.f : 1.f;
         g_eyeSign = GetPrivateProfileIntW(L"ds3vr", L"DlaaEyeSign", 1, Ini().c_str()) < 0 ? -1.f : 1.f;
         g_preset = GetPrivateProfileIntW(L"ds3vr", L"DlaaPreset", 6, Ini().c_str());  // CNN: about 60% of the transformer's cost, looks the same here
-        InstallHooks(device);
         Log("DLAA: mode at start %d (0 off, 1 DLAA, 2 jitter test)", g_mode.load());
+    }
+    // The camera hooks (and the worker-thread render-target hooks that find the scene) are only
+    // installed once DLAA or the jitter test is used, so a run with DLAA off has none of them.
+    static bool hooked = false;
+    if (!hooked && g_mode.load() != 0) {
+        hooked = true;
+        DrawLogEnsureDeferredHooks(device);
+        InstallHooks(device);
     }
     // DLAA switched off: give back its GPU memory (two DLSS features and the per-eye work textures).
     if (g_mode.load() != 1 && g_d.w) {

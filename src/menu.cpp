@@ -13,7 +13,6 @@
 #include "MinHook.h"
 #include "camhook.h"
 #include "dlss.h"
-#include "firstperson.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_impl_dx11.h"
@@ -65,20 +64,6 @@ void Filter(XINPUT_STATE* s) {
     } else {
         if (g_swallowThumbs.load(std::memory_order_relaxed))
             s->Gamepad.wButtons &= ~(XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB);
-        if (FirstPersonActive()) {
-            // First person: the game moves along its camera, but you look with the headset. Turn the left
-            // stick by the head's turn, so pushing up moves where you look (stick up = forward, x = right;
-            // a head turned left by y makes "up" point left by y).
-            const float y = CamHookHeadYaw();
-            if (std::fabs(y) > 0.001f) {
-                const float c = std::cos(y), sn = std::sin(y);
-                const float x0 = s->Gamepad.sThumbLX, y0 = s->Gamepad.sThumbLY;
-                const float x1 = x0 * c - y0 * sn, y1 = x0 * sn + y0 * c;
-                auto clamp = [](float v) { return static_cast<SHORT>(v > 32767.f ? 32767.f : v < -32768.f ? -32768.f : v); };
-                s->Gamepad.sThumbLX = clamp(x1);
-                s->Gamepad.sThumbLY = clamp(y1);
-            }
-        }
     }
 }
 
@@ -226,21 +211,6 @@ void BuildUi() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // View: third person (the default) or first person (First Person Souls), switched while you play
-    {
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("View");
-        ImGui::SameLine(430.f);
-        if (FirstPersonAvailable()) {
-            const bool fp = FirstPersonWanted();
-            if (fp) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
-            if (ImGui::Button(fp ? "First person" : "Third person  (default)", ImVec2(0.f, 0.f))) FirstPersonSet(!fp);
-            if (fp) ImGui::PopStyleColor();
-        } else {
-            ImGui::TextDisabled("Third person  (first person unavailable: see ds3vr.log)");
-        }
-    }
-
     char v[96];
     // World scale
     const float ws = WorldScaleGet();
@@ -325,14 +295,10 @@ void BuildUi() {
 
     // Resolution (read-only): what the game renders now, what SteamVR asks for, what the next launch uses.
     {
-        // Ask the VR runtime (through a fresh helper process) each time the menu opens.
-        static unsigned askedGen = 0;
-        if (askedGen != g_openGen.load()) {
-            askedGen = g_openGen.load();
-            RenderSizeCheckSteamVR();
-        }
+        // What the VR runtime asked for when the game connected (the game's own connection; no helper
+        // process while the game runs: a second VR app costs frame rate and memory until it is gone).
         unsigned askW = 0, askH = 0;
-        const int ask = RenderSizeSteamVRAnswer(&askW, &askH);
+        const bool ask = XrRecommendedNow(&askW, &askH);
         unsigned ew = 0, eh = 0, cw = 0, ch = 0, nw = 0, nh = 0;
         bool fixed = false;
         const bool haveNow = XrEyeImageSize(&ew, &eh);
@@ -345,14 +311,11 @@ void BuildUi() {
         ImGui::TextDisabled("  Game now");
         ImGui::SameLine(430.f);
         ImGui::TextUnformatted(v);
-        if (ask == 1) snprintf(v, sizeof(v), "checking...");
-        else if (ask == 2) snprintf(v, sizeof(v), "%u x %u", askW, askH);
-        else snprintf(v, sizeof(v), "no answer from the VR runtime");
-        ImGui::TextDisabled("  VR runtime asks for");
+        if (ask) snprintf(v, sizeof(v), "%u x %u", askW, askH);
+        else snprintf(v, sizeof(v), "-");
+        ImGui::TextDisabled("  VR runtime asked for");
         ImGui::SameLine(430.f);
         ImGui::TextUnformatted(v);
-        ImGui::SameLine();
-        if (ImGui::Button("Check again") && ask != 1) RenderSizeCheckSteamVR();
         if (haveNext) {
             const bool same = haveCfg && nw == cw && nh == ch;
             snprintf(v, sizeof(v), "%u x %u%s%s", nw, nh, fixed ? "  (fixed in ds3vr.ini)" : "", same ? "  (same as now)" : "  (restart the game to apply)");
@@ -362,8 +325,8 @@ void BuildUi() {
         ImGui::TextDisabled("  Next launch");
         ImGui::SameLine(430.f);
         ImGui::TextUnformatted(v);
-        ImGui::TextDisabled("  Set it in your VR runtime (SteamVR, Virtual Desktop, Meta, Pimax Play),");
-        ImGui::TextDisabled("  then reopen this menu or Check again. It applies at the next launch.");
+        ImGui::TextDisabled("  Set it in your VR runtime (SteamVR, Virtual Desktop, Meta, Pimax Play).");
+        ImGui::TextDisabled("  The game checks it each time it starts and uses it from that launch.");
         ImGui::Spacing();
     }
 
@@ -402,7 +365,6 @@ void BuildUi() {
     ImGui::SameLine();
     if (ImGui::Button("Reset to defaults", ImVec2(380.f, 0.f))) {
         XrSetHudSettings(HudSettings{0, 1.0f, 1.2f, 0.10f}, true);
-        if (FirstPersonWanted()) FirstPersonSet(false);  // first, so the scale below is saved as the third-person one
         WorldScaleSet(1.f);
         XrSetPoseLag(2);
         CamHookSetScaleHead(true);
