@@ -1,0 +1,7 @@
+name: Probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: windows-2022
+    steps:
+      - run: echo probe
