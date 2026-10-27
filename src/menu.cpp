@@ -12,6 +12,7 @@
 
 #include "MinHook.h"
 #include "camhook.h"
+#include "dlss.h"
 #include "firstperson.h"
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
@@ -253,6 +254,23 @@ void BuildUi() {
         if (lock) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
         if (ImGui::Button(lock ? "On  (stick does not tilt the view)" : "Off  (free camera)", ImVec2(0.f, 0.f))) CamHookSetHorizonLock(!lock);
         if (lock) ImGui::PopStyleColor();
+    }
+    // DLAA (test build): off, on, or the jitter test (image wobbles, DLAA off)
+    {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("DLAA  (test)");
+        ImGui::SameLine(430.f);
+        const int m = DlaaMode();
+        const char* names[3] = {"Off", "On", "Jitter test"};
+        for (int i = 0; i < 3; ++i) {
+            if (i) ImGui::SameLine();
+            const bool sel = m == i;
+            if (sel) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
+            if (ImGui::Button(names[i]) && !sel) DlaaSetMode(i);
+            if (sel) ImGui::PopStyleColor();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", DlaaStatus());
     }
     ImGui::Spacing();
 
