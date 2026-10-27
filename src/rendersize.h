@@ -27,10 +27,5 @@ bool RenderSizeGet(unsigned* w, unsigned* h);
 bool RenderSizeNextLaunch(unsigned* w, unsigned* h, bool* fixed);
 // The VR runtime asked for this per-eye height while the game was running: remember it for the next launch.
 void RenderSizeRememberHeadsetHeight(unsigned h);
-// Asks SteamVR for its current per-eye size from a fresh helper process (the game's own connection
-// keeps reporting the size it started with). Runs in the background; saves the answer for the next launch.
-void RenderSizeCheckSteamVR();
-// 0 = not asked yet, 1 = asking, 2 = answered (w, h filled in), 3 = no answer.
-int RenderSizeSteamVRAnswer(unsigned* w, unsigned* h);
 
 } // namespace ds3vr

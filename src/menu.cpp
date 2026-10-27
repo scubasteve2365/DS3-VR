@@ -252,14 +252,10 @@ void BuildUi() {
 
     // Resolution (read-only): what the game renders now, what SteamVR asks for, what the next launch uses.
     {
-        // Ask the VR runtime (through a fresh helper process) each time the menu opens.
-        static unsigned askedGen = 0;
-        if (askedGen != g_openGen.load()) {
-            askedGen = g_openGen.load();
-            RenderSizeCheckSteamVR();
-        }
+        // What the VR runtime asked for when the game connected (the game's own connection; no helper
+        // process while the game runs: a second VR app costs frame rate and memory until it is gone).
         unsigned askW = 0, askH = 0;
-        const int ask = RenderSizeSteamVRAnswer(&askW, &askH);
+        const bool ask = XrRecommendedNow(&askW, &askH);
         unsigned ew = 0, eh = 0, cw = 0, ch = 0, nw = 0, nh = 0;
         bool fixed = false;
         const bool haveNow = XrEyeImageSize(&ew, &eh);
@@ -272,14 +268,11 @@ void BuildUi() {
         ImGui::TextDisabled("  Game now");
         ImGui::SameLine(430.f);
         ImGui::TextUnformatted(v);
-        if (ask == 1) snprintf(v, sizeof(v), "checking...");
-        else if (ask == 2) snprintf(v, sizeof(v), "%u x %u", askW, askH);
-        else snprintf(v, sizeof(v), "no answer from the VR runtime");
-        ImGui::TextDisabled("  VR runtime asks for");
+        if (ask) snprintf(v, sizeof(v), "%u x %u", askW, askH);
+        else snprintf(v, sizeof(v), "-");
+        ImGui::TextDisabled("  VR runtime asked for");
         ImGui::SameLine(430.f);
         ImGui::TextUnformatted(v);
-        ImGui::SameLine();
-        if (ImGui::Button("Check again") && ask != 1) RenderSizeCheckSteamVR();
         if (haveNext) {
             const bool same = haveCfg && nw == cw && nh == ch;
             snprintf(v, sizeof(v), "%u x %u%s%s", nw, nh, fixed ? "  (fixed in ds3vr.ini)" : "", same ? "  (same as now)" : "  (restart the game to apply)");
@@ -289,8 +282,8 @@ void BuildUi() {
         ImGui::TextDisabled("  Next launch");
         ImGui::SameLine(430.f);
         ImGui::TextUnformatted(v);
-        ImGui::TextDisabled("  Set it in your VR runtime (SteamVR, Virtual Desktop, Meta, Pimax Play),");
-        ImGui::TextDisabled("  then reopen this menu or Check again. It applies at the next launch.");
+        ImGui::TextDisabled("  Set it in your VR runtime (SteamVR, Virtual Desktop, Meta, Pimax Play).");
+        ImGui::TextDisabled("  The game checks it each time it starts and uses it from that launch.");
         ImGui::Spacing();
     }
 
