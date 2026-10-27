@@ -1,0 +1,64 @@
+# Builds ds3vr_ngx.dll, the helper that links NVIDIA's NGX library (DLSS SDK), with Visual Studio:
+# NVIDIA ships that library for Visual Studio only, and the mod itself is built with mingw.
+# The result is committed to the ngx-build branch (ds3vr_ngx.dll plus SOURCE, the commit it was built
+# from), where build.sh and the release workflow pick it up.
+name: NGX helper
+
+on:
+  push:
+    branches: [v2, main]
+    paths:
+      - 'tools/ngx/**'
+      - 'src/ngx_api.h'
+      - '.github/workflows/ngx.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # NVIDIA DLSS SDK 310.9.16 (https://github.com/NVIDIA/DLSS). Change both together.
+  DLSS_SDK_COMMIT: 9981c6350dc58c0ce21f024fd65e31e851c31689
+  DLSS_SDK_VERSION: 310.9.16
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the DLSS SDK (headers and the static library only)
+        shell: bash
+        run: |
+          git init -q dlss_sdk
+          cd dlss_sdk
+          git remote add origin https://github.com/NVIDIA/DLSS
+          git sparse-checkout init --no-cone
+          git sparse-checkout set '/include/' '/lib/Windows_x86_64/x64/nvsdk_ngx_s.lib' '/LICENSE.txt'
+          git fetch -q --depth 1 --filter=blob:none origin "$DLSS_SDK_COMMIT"
+          git checkout -q FETCH_HEAD
+          ls include lib/Windows_x86_64/x64
+
+      - name: Build ds3vr_ngx.dll
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          cl /nologo /O2 /MT /EHsc /std:c++17 /W3 /LD /I dlss_sdk\include tools\ngx\ds3vr_ngx.cpp /Fe:ds3vr_ngx.dll /link dlss_sdk\lib\Windows_x86_64\x64\nvsdk_ngx_s.lib d3d11.lib dxgi.lib advapi32.lib user32.lib || exit /b 1
+          dumpbin /exports ds3vr_ngx.dll
+
+      - name: Commit to the ngx-build branch
+        shell: bash
+        run: |
+          SRC=$(git rev-parse HEAD)
+          mkdir out
+          cp ds3vr_ngx.dll out/
+          printf 'built from %s (%s)\nDLSS SDK %s (%s)\n' "$SRC" "$GITHUB_REF_NAME" "$DLSS_SDK_VERSION" "$DLSS_SDK_COMMIT" > out/SOURCE
+          cd out
+          git init -q -b ngx-build
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ds3vr_ngx.dll SOURCE
+          git commit -q -m "ds3vr_ngx.dll from $SRC"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" ngx-build

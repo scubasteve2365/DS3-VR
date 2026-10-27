@@ -20,7 +20,7 @@ for f in imgui imgui_draw imgui_tables imgui_widgets; do $CXX -O2 -std=c++17 -c 
 $CXX -O2 -std=c++17 -c -I$I $I/backends/imgui_impl_dx11.cpp -o $O/imgui_impl_dx11.o
 $CXX -O2 -Wall -std=c++17 -shared -static-libgcc -static-libstdc++ -mthreads -I$M/include -I$I -I$I/backends -Ithird_party/openxr/include -Isrc \
   -o build/dinput8.dll src/dllmain.cpp src/log.cpp src/proxy_dinput8.cpp src/present.cpp src/xr.cpp src/camhook.cpp src/rendersize.cpp \
-  src/fps.cpp src/hud.cpp src/drawlog.cpp src/worldscale.cpp src/menu.cpp src/dinput8.def \
+  src/fps.cpp src/hud.cpp src/drawlog.cpp src/worldscale.cpp src/menu.cpp src/dlss.cpp src/dinput8.def \
   $O/buffer.o $O/hook.o $O/trampoline.o $O/hde64.o $O/imgui.o $O/imgui_draw.o $O/imgui_tables.o $O/imgui_widgets.o $O/imgui_impl_dx11.o \
   -luser32 -ladvapi32 -lpsapi
 
