@@ -163,7 +163,10 @@ float Halton(unsigned i, unsigned b) {
     }
     return r;
 }
-std::atomic<unsigned> g_frame{0};  // advances at each Present
+// The jitter phase. With DLAA running it advances right after DLAA (every camera upload before that point
+// belongs to the frame DLAA just resolved); otherwise at each Present.
+std::atomic<unsigned> g_frame{0};
+std::atomic<bool> g_doneSincePresent{false};
 void JitterFor(unsigned frame, float* x, float* y) {  // pixels, x right, y down, in [-0.5, 0.5)
     const unsigned i = (frame % 16) + 1;
     *x = Halton(i, 2) - 0.5f;
@@ -218,7 +221,7 @@ struct Camera {
 };
 std::mutex g_camMutex;
 Camera g_camLatest;
-std::atomic<unsigned> g_statMain{0}, g_statHalf{0}, g_statOther{0};
+std::atomic<unsigned> g_statMain{0}, g_statHalf{0}, g_statOther{0}, g_statOtherView{0}, g_statStale{0};
 
 // The game is writing camera constants into memory p (about to be uploaded): note the main camera, jitter.
 void OnCameraUpload(float* p) {
@@ -244,6 +247,12 @@ void OnCameraUpload(float* p) {
     if (main) {
         g_statMain.fetch_add(1, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(g_camMutex);
+        // Same frame as the last main camera, but a different view? (a second camera at full size)
+        if (g_camLatest.valid && g_camLatest.frame == frame) {
+            float diff = 0.f;
+            for (int k = 0; k < 16; ++k) diff = std::fmax(diff, std::fabs(g_camLatest.vp[k] - p[24 * 4 + k]));
+            if (diff > 1e-4f) g_statOtherView.fetch_add(1, std::memory_order_relaxed);
+        }
         memcpy(g_camLatest.vp, p + 24 * 4, sizeof(g_camLatest.vp));
         memcpy(g_camLatest.cam, p + 3 * 4, sizeof(g_camLatest.cam));
         g_camLatest.jx = jx;
@@ -612,6 +621,7 @@ void RunDlaa(ID3D11DeviceContext* c) {
         std::lock_guard<std::mutex> lock(g_camMutex);
         cur = g_camLatest;
     }
+    if (cur.valid && cur.frame != g_frame.load()) g_statStale.fetch_add(1, std::memory_order_relaxed);
     D3D11_TEXTURE2D_DESC sd{};
     scene->GetDesc(&sd);
     bool ok = cur.valid;
@@ -751,6 +761,17 @@ const char* DlaaStatus() {
     return copy.c_str();
 }
 
+float DlaaJitterSign() { return g_jitterSign; }
+float DlaaEyeSign() { return g_eyeSign; }
+void DlaaSetSigns(float jitter, float eye) {
+    g_jitterSign = jitter < 0.f ? -1.f : 1.f;
+    g_eyeSign = eye < 0.f ? -1.f : 1.f;
+    g_wantReset = true;
+    WritePrivateProfileStringW(L"ds3vr", L"DlaaJitterSign", g_jitterSign < 0.f ? L"-1" : L"1", Ini().c_str());
+    WritePrivateProfileStringW(L"ds3vr", L"DlaaEyeSign", g_eyeSign < 0.f ? L"-1" : L"1", Ini().c_str());
+    Log("DLAA: jitter sign %+.0f, eye sign %+.0f", g_jitterSign, g_eyeSign);
+}
+
 bool DlaaBusy() { return g_busy.load(std::memory_order_relaxed); }
 
 void DlaaOnSetRenderTargets(unsigned n, ID3D11RenderTargetView* const* rtv, ID3D11DepthStencilView* dsv) {
@@ -775,7 +796,10 @@ void DlaaOnSetRenderTargets(unsigned n, ID3D11RenderTargetView* const* rtv, ID3D
         const bool match = c.Format == DXGI_FORMAT_R16G16B16A16_FLOAT && c.ArraySize == 2 && c.SampleDesc.Count == 1 &&
                            d.Format == DXGI_FORMAT_R32G8X24_TYPELESS && d.ArraySize == 2 && (d.BindFlags & D3D11_BIND_SHADER_RESOURCE) &&
                            c.Width == d.Width && c.Height == d.Height;
-        if (match) {
+        // DS3 also lights a half-size copy the same way: keep the full-size one (the largest seen).
+        const bool largest = static_cast<unsigned long long>(c.Width) * c.Height >=
+                             static_cast<unsigned long long>(g_sceneW.load()) * g_sceneH.load();
+        if (match && largest) {
             std::lock_guard<std::mutex> lock(g_sceneMutex);
             if (g_scene != ct || g_depth != dt) {
                 SafeRelease(g_scene);
@@ -794,11 +818,9 @@ void DlaaOnSetRenderTargets(unsigned n, ID3D11RenderTargetView* const* rtv, ID3D
 }
 
 void DlaaBeforeDraw(ID3D11DeviceContext* c) {
-    static unsigned doneFrame = ~0u;
     if (g_busy.load(std::memory_order_relaxed) || g_mode.load(std::memory_order_relaxed) != 1 || g_ngxFailed.load(std::memory_order_relaxed))
         return;
-    const unsigned frame = g_frame.load(std::memory_order_relaxed);
-    if (doneFrame == frame) return;
+    if (g_doneSincePresent.load(std::memory_order_relaxed)) return;  // once per frame
     ID3D11Texture2D* scene = g_scene;  // read without the lock: only compared
     if (!scene) return;
     ID3D11ShaderResourceView* srv = nullptr;
@@ -810,12 +832,13 @@ void DlaaBeforeDraw(ID3D11DeviceContext* c) {
     const bool hit = r == scene;
     SafeRelease(r);
     if (!hit) return;
-    doneFrame = frame;
     if (!g_d.started && !Start(c)) {
         g_ngxFailed = true;
         return;
     }
     RunDlaa(c);
+    g_frame.fetch_add(1, std::memory_order_relaxed);  // uploads from here on are the next frame's
+    g_doneSincePresent = true;
     if (!g_ready && g_statEvals.load() > 0) {
         g_ready = true;
         SetStatus("running");
@@ -827,7 +850,7 @@ void DlssOnPresent(ID3D11Device* device) {
     static int frames = 0;
     static bool installed = false;
     if (!device) return;
-    g_frame.fetch_add(1, std::memory_order_relaxed);
+    if (!g_doneSincePresent.exchange(false)) g_frame.fetch_add(1, std::memory_order_relaxed);
     if (!installed) {
         installed = true;
         g_mode = GetPrivateProfileIntW(L"ds3vr", L"DlaaMode", 0, Ini().c_str());
@@ -842,9 +865,10 @@ void DlssOnPresent(ID3D11Device* device) {
     const ULONGLONG now = GetTickCount64();
     if (g_mode != 0 && now >= nextStat) {
         if (nextStat)
-            Log("DLAA: last 10 s: camera uploads main %u, half-size %u, other %u; DLSS evaluations %u ok, %u failed; %d camera buffers",
-                g_statMain.exchange(0), g_statHalf.exchange(0), g_statOther.exchange(0), g_statEvals.exchange(0), g_statFail.exchange(0),
-                g_cbCount.load());
+            Log("DLAA: last 10 s: camera uploads main %u (another view %u), half-size %u, other %u; DLSS evaluations %u ok, %u failed, "
+                "camera from another jitter phase %u; %d camera buffers",
+                g_statMain.exchange(0), g_statOtherView.exchange(0), g_statHalf.exchange(0), g_statOther.exchange(0), g_statEvals.exchange(0),
+                g_statFail.exchange(0), g_statStale.exchange(0), g_cbCount.load());
         nextStat = now + 10000;
     }
     {

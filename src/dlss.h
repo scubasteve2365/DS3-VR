@@ -26,6 +26,9 @@ void DlssOnPresent(ID3D11Device* device);  // every Present, on the render threa
 int DlaaMode();
 void DlaaSetMode(int mode);   // from the menu: applied now and saved
 const char* DlaaStatus();     // one short line for the menu
+float DlaaJitterSign();       // +1 / -1: direction of the jitter told to DLSS
+float DlaaEyeSign();          // +1 / -1: which slice geo-11 shifts right
+void DlaaSetSigns(float jitter, float eye);  // from the menu: applied now (history reset) and saved
 
 // Called from the context hooks in drawlog.cpp.
 void DlaaOnSetRenderTargets(unsigned n, ID3D11RenderTargetView* const* rtv, ID3D11DepthStencilView* dsv);  // any context

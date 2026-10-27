@@ -271,6 +271,17 @@ void BuildUi() {
         }
         ImGui::SameLine();
         ImGui::TextDisabled("%s", DlaaStatus());
+        if (m == 1) {
+            const float js = DlaaJitterSign(), es = DlaaEyeSign();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("  DLAA directions");
+            ImGui::SameLine(430.f);
+            if (ImGui::Button(js > 0.f ? "Jitter +" : "Jitter -")) DlaaSetSigns(-js, es);
+            ImGui::SameLine();
+            if (ImGui::Button(es > 0.f ? "Eyes +" : "Eyes -")) DlaaSetSigns(js, -es);
+            ImGui::SameLine();
+            ImGui::TextDisabled("try each if it looks soft or flickers");
+        }
     }
     ImGui::Spacing();
 
