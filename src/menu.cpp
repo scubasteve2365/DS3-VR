@@ -15,6 +15,7 @@
 #include "dlss.h"
 #include "firstperson.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_dx11.h"
 #include "log.h"
 #include "menu_font.h"
@@ -218,7 +219,7 @@ void BuildUi() {
     }
     ImGui::Begin("DS3 VR", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+                     ImGuiWindowFlags_NoSavedSettings);
     ImGui::TextColored(kMenuAccent, "DARK SOULS III VR");
     ImGui::SameLine();
     ImGui::TextDisabled("v" DS3VR_VERSION);
@@ -269,7 +270,8 @@ void BuildUi() {
             if (ImGui::Button(names[i]) && !sel) DlaaSetMode(i);
             if (sel) ImGui::PopStyleColor();
         }
-        ImGui::SameLine();
+        ImGui::TextDisabled("  Status");
+        ImGui::SameLine(430.f);
         ImGui::TextDisabled("%s", DlaaStatus());
         if (m == 1) {
             const float js = DlaaJitterSign(), es = DlaaEyeSign();
@@ -279,14 +281,12 @@ void BuildUi() {
             if (ImGui::Button(js > 0.f ? "Jitter +" : "Jitter -")) DlaaSetSigns(-js, es);
             ImGui::SameLine();
             if (ImGui::Button(es > 0.f ? "Eyes +" : "Eyes -")) DlaaSetSigns(js, -es);
-            ImGui::SameLine();
-            ImGui::TextDisabled("try each if it looks soft or flickers");
             const int pr = DlaaPreset();
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted("  DLAA model");
             ImGui::SameLine(430.f);
-            const int presets[3] = {0, 11, 6};
-            const char* pnames[3] = {"Driver default", "Transformer (K)", "CNN (F, faster)"};
+            const int presets[3] = {6, 11, 0};
+            const char* pnames[3] = {"CNN  (faster)", "Transformer", "Driver default"};
             for (int i = 0; i < 3; ++i) {
                 if (i) ImGui::SameLine();
                 const bool sel = pr == presets[i];
@@ -418,6 +418,16 @@ void BuildUi() {
     ImGui::Separator();
     ImGui::TextDisabled("Both sticks / Insert: open & close.  A: select.  B: close.");
     ImGui::TextDisabled("Keys: F6 HUD size, F7 HUD mode, F8 recenter");
+    // Keep the selected row in the middle of the panel when the menu is taller than the panel.
+    {
+        ImGuiContext& g = *GImGui;
+        ImGuiWindow* w = ImGui::GetCurrentWindow();
+        static ImGuiID lastNav = 0;
+        if (g.NavWindow == w && g.NavId && g.NavId != lastNav) {
+            lastNav = g.NavId;
+            ImGui::ScrollToRect(w, ImGui::WindowRectRelToAbs(w, w->NavRectRel[0]), ImGuiScrollFlags_AlwaysCenterY | ImGuiScrollFlags_KeepVisibleEdgeX);
+        }
+    }
     ImGui::End();
 }
 

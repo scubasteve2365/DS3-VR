@@ -146,7 +146,7 @@ std::atomic<bool> g_ngxFailed{false};  // NGX or DLSS could not start: DLAA stay
 std::atomic<bool> g_ready{false};      // DLAA features exist and run
 float g_jitterSign = 1.f;              // ds3vr.ini DlaaJitterSign (flip if standing still looks soft)
 float g_eyeSign = 1.f;
-std::atomic<int> g_preset{0};          // ds3vr.ini DlaaPreset: 0 driver default, 6 CNN (preset F, faster), 11 transformer (preset K)
+std::atomic<int> g_preset{6};          // ds3vr.ini DlaaPreset: 0 driver default, 6 CNN (preset F, faster), 11 transformer (preset K)
 std::atomic<bool> g_presetChanged{false};                 // ds3vr.ini DlaaEyeSign: geo-11's shift sign for slice 0 (+1) or slice 1
 constexpr float kTestScale = 8.f;      // jitter test: offsets made 8x larger so the wobble is easy to see
 
@@ -952,9 +952,16 @@ void DlssOnPresent(ID3D11Device* device) {
         if (g_mode < 0 || g_mode > 2) g_mode = 0;
         g_jitterSign = GetPrivateProfileIntW(L"ds3vr", L"DlaaJitterSign", 1, Ini().c_str()) < 0 ? -1.f : 1.f;
         g_eyeSign = GetPrivateProfileIntW(L"ds3vr", L"DlaaEyeSign", 1, Ini().c_str()) < 0 ? -1.f : 1.f;
-        g_preset = GetPrivateProfileIntW(L"ds3vr", L"DlaaPreset", 0, Ini().c_str());
+        g_preset = GetPrivateProfileIntW(L"ds3vr", L"DlaaPreset", 6, Ini().c_str());  // CNN: about 60% of the transformer's cost, looks the same here
         InstallHooks(device);
         Log("DLAA: mode at start %d (0 off, 1 DLAA, 2 jitter test)", g_mode.load());
+    }
+    // DLAA switched off: give back its GPU memory (two DLSS features and the per-eye work textures).
+    if (g_mode.load() != 1 && g_d.w) {
+        FreeTargets();
+        g_d.prev.valid = false;
+        g_ready = false;
+        Log("DLAA: off, its GPU memory released");
     }
     // Every ~10 s while on: what the jitter and DLAA did.
     static ULONGLONG nextStat = 0;
