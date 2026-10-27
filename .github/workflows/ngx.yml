@@ -30,6 +30,8 @@ jobs:
 
       - name: Fetch the DLSS SDK (headers and the static library only)
         shell: bash
+        env:
+          MSYS_NO_PATHCONV: "1"  # Git Bash would turn the '/include/' patterns into Windows paths
         run: |
           git init -q dlss_sdk
           cd dlss_sdk
