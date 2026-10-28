@@ -237,7 +237,7 @@ PFN_xrReleaseSwapchainImage xrReleaseSwapchainImage_ = nullptr;
 // State
 // ---------------------------------------------------------------------------------------------
 std::recursive_mutex g_xrMutex;  // TickXR vs. shutdown from the window thread
-bool g_started = false, g_dead = false, g_running = false, g_loggedViews = false;
+bool g_started = false, g_initDone = false, g_dead = false, g_running = false, g_loggedViews = false;
 ID3D11Device* g_device = nullptr;
 XrInstance g_inst = XR_NULL_HANDLE;
 XrSystemId g_sys = XR_NULL_SYSTEM_ID;
@@ -462,7 +462,12 @@ void CaptureUpscaled(ID3D11DeviceContext* ctx, ID3D11Texture2D* const* up, UINT 
 // ---------------------------------------------------------------------------------------------
 // OpenXR setup
 // ---------------------------------------------------------------------------------------------
-bool InitXR() {
+// 1 = started, 0 = failed (OpenXR off this run), 2 = the headset is not available yet: call again later.
+// The instance is kept between tries. Virtual Desktop's runtime answers "not available" (form factor
+// unavailable) for a moment while a headset is connected but not ready, e.g. right after the startup
+// resolution check let go of it; the OpenXR spec says to keep asking.
+int InitXR() {
+  if (g_inst == XR_NULL_HANDLE) {
     ReadSettings();
     if (!LoadRuntime()) return false;
 
@@ -503,11 +508,31 @@ bool InitXR() {
     XRCHECK(xrGetInstanceProperties_(inst, &ip));
     Log("XR: runtime \"%s\" %u.%u.%u", ip.runtimeName, static_cast<unsigned>(XR_VERSION_MAJOR(ip.runtimeVersion)),
         static_cast<unsigned>(XR_VERSION_MINOR(ip.runtimeVersion)), static_cast<unsigned>(XR_VERSION_PATCH(ip.runtimeVersion)));
+  }
+    XrInstance inst = g_inst;
 
     XrSystemGetInfo sgi{XR_TYPE_SYSTEM_GET_INFO};
     sgi.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
     XrSystemId sys = XR_NULL_SYSTEM_ID;
-    XRCHECK(xrGetSystem_(inst, &sgi, &sys));
+    {
+        static ULONGLONG waitStart = 0;
+        const XrResult gs = xrGetSystem_(inst, &sgi, &sys);
+        if (gs == XR_ERROR_FORM_FACTOR_UNAVAILABLE) {
+            const ULONGLONG now = GetTickCount64();
+            if (!waitStart) {
+                waitStart = now;
+                Log("XR: the VR runtime says the headset is not available yet; asking again for up to 30 s");
+            }
+            if (now - waitStart < 30000) return 2;
+            Log("XR: the headset was still not available after 30 s (is it connected and awake in your VR app?)");
+            return false;
+        }
+        if (XR_FAILED(gs)) {
+            Log("XR: xrGetSystem failed: %d", static_cast<int>(gs));
+            return false;
+        }
+        if (waitStart) Log("XR: the headset became available after %llu ms", GetTickCount64() - waitStart);
+    }
     g_sys = sys;
     XrSystemProperties sp{XR_TYPE_SYSTEM_PROPERTIES};
     XRCHECK(xrGetSystemProperties_(inst, sys, &sp));
@@ -1486,7 +1511,19 @@ void XrOnPresent(ID3D11Device* device, IDXGISwapChain*) {
         device->AddRef();
         g_device = device;
         Log("XR: starting (milestone G1: geo-11 stereo)");
-        if (!InitXR()) {
+    }
+    if (!g_initDone) {
+        // While the headset is not available yet, ask again every quarter second (the game keeps running).
+        static ULONGLONG nextTry = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (now < nextTry) return;
+        const int r = InitXR();
+        if (r == 2) {
+            nextTry = now + 250;
+            return;
+        }
+        g_initDone = true;
+        if (r != 1) {
             Log("XR: init failed, OpenXR disabled for this run (the game keeps running normally)");
             Shutdown("init failed");
         }
