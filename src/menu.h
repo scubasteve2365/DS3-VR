@@ -16,5 +16,6 @@ void MenuTick(ID3D11Device* dev, ID3D11DeviceContext* c);  // every Present, bef
 bool MenuIsOpen();
 unsigned MenuOpenGeneration();                             // changes each time the menu opens
 ID3D11Texture2D* MenuTexture();                            // null until first drawn
+unsigned MenuContentHeight();                              // rows of MenuTexture() the menu uses (top part)
 
 } // namespace ds3vr

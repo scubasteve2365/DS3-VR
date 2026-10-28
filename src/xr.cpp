@@ -1122,10 +1122,12 @@ bool TickXR() {
             menuQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
             menuQuad.subImage.swapchain = g_menuSc;
             menuQuad.subImage.imageRect.offset = {0, 0};
-            menuQuad.subImage.imageRect.extent = {static_cast<int32_t>(g_menuW), static_cast<int32_t>(g_menuH)};
+            // Only the part of the texture the menu uses: the panel is as tall as the menu, nothing scrolls.
+            const UINT mh = std::min<UINT>(MenuContentHeight(), g_menuH);
+            menuQuad.subImage.imageRect.extent = {static_cast<int32_t>(g_menuW), static_cast<int32_t>(mh)};
             menuQuad.space = g_local;
             menuQuad.pose = g_menuPose;
-            menuQuad.size = {kMenuWidth, kMenuWidth * static_cast<float>(g_menuH) / static_cast<float>(g_menuW)};
+            menuQuad.size = {kMenuWidth, kMenuWidth * static_cast<float>(mh) / static_cast<float>(g_menuW)};
             layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&menuQuad);
         }
     }

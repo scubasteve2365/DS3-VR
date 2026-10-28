@@ -15,7 +15,6 @@
 #include "camhook.h"
 #include "dlss.h"
 #include "imgui.h"
-#include "imgui_internal.h"
 #include "imgui_impl_dx11.h"
 #include "log.h"
 #include "menu_font.h"
@@ -47,7 +46,7 @@ extern "C" HRESULT WINAPI D3DCompile(const void* data, SIZE_T size, const char* 
 namespace ds3vr {
 namespace {
 
-constexpr UINT kW = 1280, kH = 1250;
+constexpr UINT kW = 1280, kH = 2400;  // the texture; the panel shows only the menu's height
 
 // ---------- gamepad (XInput) ----------
 using XInputGetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
@@ -195,9 +194,32 @@ void SetAdvancedShown(bool on) {
     WritePrivateProfileStringW(L"ds3vr", L"AdvancedSettings", on ? L"1" : L"0", (std::wstring(ModuleDir()) + L"ds3vr.ini").c_str());
 }
 
+// One label at the left, the controls in the column at x = 430.
+void Label(const char* text) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(text);
+    ImGui::SameLine(430.f);
+}
+
+// A row of choice buttons; returns the index clicked (or -1).
+int Choice(const char* const* names, int n, int selected) {
+    int clicked = -1;
+    for (int i = 0; i < n; ++i) {
+        if (i) ImGui::SameLine();
+        const bool sel = selected == i;
+        if (sel) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
+        if (ImGui::Button(names[i]) && !sel) clicked = i;
+        if (sel) ImGui::PopStyleColor();
+    }
+    return clicked;
+}
+
+float g_contentH = 0.f;  // the menu's height last frame (the VR panel shows only that much)
+
 void BuildUi() {
     ImGui::SetNextWindowPos(ImVec2(0.f, 0.f));
-    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(kW), static_cast<float>(kH)));
+    // As tall as its contents (up to the texture), so nothing has to scroll.
+    ImGui::SetNextWindowSizeConstraints(ImVec2(static_cast<float>(kW), 0.f), ImVec2(static_cast<float>(kW), static_cast<float>(kH)));
     static unsigned focusedGen = 0;
     if (focusedGen != g_openGen.load()) {
         ImGui::SetNextWindowFocus();
@@ -205,7 +227,7 @@ void BuildUi() {
     }
     ImGui::Begin("DS3 VR", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-                     ImGuiWindowFlags_NoSavedSettings);
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::TextColored(kMenuAccent, "DARK SOULS III VR");
     ImGui::SameLine();
     ImGui::TextDisabled("v" DS3VR_VERSION);
@@ -213,23 +235,22 @@ void BuildUi() {
     ImGui::Spacing();
 
     char v[160];
-    // World scale
+    // ---- View ----
     const float ws = WorldScaleGet();
     const char* note = ws == 1.f ? "  (life size)" : ws == 0.25f ? "  (largest)" : ws == 10.f ? "  (smallest)" : "";
     snprintf(v, sizeof(v), ws < 1.f ? "%.2f%s" : "%.1f%s", ws, note);
     if (const int d = Stepper("World scale", v, "ws")) WorldScaleStep(d);
     {
         const bool lock = CamHookGetHorizonLock();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Horizon lock");
-        ImGui::SameLine(430.f);
+        Label("Horizon lock");
         if (lock) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
         if (ImGui::Button(lock ? "On  (stick does not tilt the view)" : "Off  (free camera)", ImVec2(0.f, 0.f))) CamHookSetHorizonLock(!lock);
         if (lock) ImGui::PopStyleColor();
     }
-    // DLSS: Off and DLAA switch now; the upscaling modes change the render size, so they apply at the next launch.
+
+    // ---- DLSS: Off and DLAA switch now; the upscaling modes change the render size (next launch) ----
+    const int saved = DlssModeSaved(), live = DlssModeNow();
     {
-        const int saved = DlssModeSaved(), live = DlssModeNow();
         const bool noDlss = DlssAvailable() == 0;
         auto modeButton = [&](int m, const char* label) {
             const bool sel = saved == m;
@@ -239,9 +260,7 @@ void BuildUi() {
             if (noDlss && m != kDlssOff) ImGui::EndDisabled();
             if (sel) ImGui::PopStyleColor();
         };
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("DLSS");
-        ImGui::SameLine(430.f);
+        Label("NVIDIA DLSS");
         modeButton(kDlssOff, "Off");
         ImGui::SameLine();
         modeButton(kDlssDlaa, "DLAA");
@@ -253,69 +272,29 @@ void BuildUi() {
         modeButton(kDlssPerformance, "Performance");
         ImGui::SameLine();
         modeButton(kDlssUltraPerformance, "Ultra Perf");
-        ImGui::TextDisabled("  Status");
-        ImGui::SameLine(430.f);
-        ImGui::TextDisabled("%s", DlssStatus());
+        if (saved != kDlssOff || live != kDlssOff || noDlss) {
+            ImGui::TextDisabled("  Status");
+            ImGui::SameLine(430.f);
+            ImGui::TextDisabled("%s", DlssStatus());
+        }
         if (saved >= kDlssQuality && saved != live) {
-            ImGui::TextDisabled("  ");
-            ImGui::SameLine(430.f);
+            ImGui::SetCursorPosX(430.f);
             ImGui::TextDisabled("Upscaling modes apply when you restart the game.");
-        }
-        if (saved != kDlssOff || live != kDlssOff) {
-            const int pr = DlaaPreset();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("  DLSS model");
-            ImGui::SameLine(430.f);
-            const int presets[3] = {6, 11, 0};
-            const char* pnames[3] = {"CNN  (faster)", "Transformer", "Driver default"};
-            for (int i = 0; i < 3; ++i) {
-                if (i) ImGui::SameLine();
-                const bool sel = pr == presets[i];
-                if (sel) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
-                if (ImGui::Button(pnames[i]) && !sel) DlaaSetPreset(presets[i]);
-                if (sel) ImGui::PopStyleColor();
-            }
-        }
-        if (live != kDlssOff) {
-            const float js = DlaaJitterSign(), es = DlaaEyeSign();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("  Directions  (test)");
-            ImGui::SameLine(430.f);
-            if (ImGui::Button(js > 0.f ? "Jitter +" : "Jitter -")) DlaaSetSigns(-js, es);
-            ImGui::SameLine();
-            if (ImGui::Button(es > 0.f ? "Eyes +" : "Eyes -")) DlaaSetSigns(js, -es);
-        }
-        if (live >= kDlssQuality) {
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("  Pairing  (test)");
-            ImGui::SameLine(430.f);
-            const bool prev = DlssPairPrevious();
-            if (ImGui::Button(prev ? "Previous frame" : "Same frame")) DlssSetPairPrevious(!prev);
-            ImGui::SameLine();
-            const bool sw = DlssHalvesSwapped();
-            if (ImGui::Button(sw ? "Halves swapped" : "Halves normal")) DlssSetHalvesSwapped(!sw);
-            snprintf(v, sizeof(v), "%+.2f  (offset %+.2f)", DlssMipBias(), DlssMipBiasOffset());
-            if (const int d = Stepper("  Texture mip bias", v, "mb")) DlssStepMipBiasOffset(d);
         }
     }
     ImGui::Spacing();
 
-    // HUD
+    // ---- HUD ----
     HudSettings h = XrGetHudSettings();
     bool changed = false;
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("HUD");
-    ImGui::SameLine(430.f);
-    const char* modes[3] = {"Fixed", "Follows head", "Hidden"};
-    for (int i = 0; i < 3; ++i) {
-        if (i) ImGui::SameLine();
-        const bool sel = h.mode == i;
-        if (sel) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
-        if (ImGui::Button(modes[i])) {
-            h.mode = i;
+    {
+        Label("HUD");
+        const char* modes[3] = {"Fixed", "Follows head", "Hidden"};
+        const int c = Choice(modes, 3, h.mode);
+        if (c >= 0) {
+            h.mode = c;
             changed = true;
         }
-        if (sel) ImGui::PopStyleColor();
     }
     snprintf(v, sizeof(v), "%.1f m wide", h.width);
     if (const int d = Stepper("HUD size", v, "hw")) { h.width += 0.1f * d; changed = true; }
@@ -325,12 +304,8 @@ void BuildUi() {
     if (const int d = Stepper("HUD height", v, "hh")) { h.drop -= 0.05f * d; changed = true; }
     if (changed) XrSetHudSettings(h, true);
 
-    // Resolution (read-only): what the game renders now, what SteamVR asks for, what the next launch uses.
+    // ---- Resolution (read-only) ----
     {
-        // What the VR runtime asked for when the game connected (the game's own connection; no helper
-        // process while the game runs: a second VR app costs frame rate and memory until it is gone).
-        unsigned askW = 0, askH = 0;
-        const bool ask = XrRecommendedNow(&askW, &askH);
         unsigned ew = 0, eh = 0, cw = 0, ch = 0, nw = 0, nh = 0;
         bool fixed = false;
         const bool haveNow = XrEyeImageSize(&ew, &eh);
@@ -350,11 +325,6 @@ void BuildUi() {
             ImGui::SameLine(430.f);
             ImGui::TextUnformatted(v);
         }
-        if (ask) snprintf(v, sizeof(v), "%u x %u", askW, askH);
-        else snprintf(v, sizeof(v), "-");
-        ImGui::TextDisabled("  VR runtime asked for");
-        ImGui::SameLine(430.f);
-        ImGui::TextUnformatted(v);
         if (haveNext) {
             const bool same = haveCfg && nw == cw && nh == ch;
             snprintf(v, sizeof(v), "%u x %u%s%s", nw, nh, fixed ? "  (fixed in ds3vr.ini)" : "", same ? "  (same as now)" : "  (restart the game to apply)");
@@ -371,37 +341,65 @@ void BuildUi() {
         ImGui::TextDisabled("  Next launch");
         ImGui::SameLine(430.f);
         ImGui::TextUnformatted(v);
-        ImGui::TextDisabled("  Set it in your VR runtime (SteamVR, Virtual Desktop, Meta, Pimax Play).");
-        ImGui::TextDisabled("  The game checks it each time it starts and uses it from that launch.");
-        ImGui::Spacing();
+        ImGui::TextDisabled("  Set in your VR runtime (SteamVR, Virtual Desktop, Meta, Pimax Play).");
+        ImGui::TextDisabled("  The game reads it each time it starts.");
     }
+    ImGui::Spacing();
 
-    // Advanced settings (head-motion steadiness), shown on request
+    // ---- Advanced: settings a player may want, hidden until asked for ----
     {
         const bool adv = AdvancedShown();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Advanced settings");
-        ImGui::SameLine(430.f);
+        Label("Advanced settings");
         if (ImGui::Button(adv ? "Shown" : "Hidden", ImVec2(0.f, 0.f))) SetAdvancedShown(!adv);
         if (adv) {
             const int lag = XrGetPoseLag();
             snprintf(v, sizeof(v), "%d%s", lag, lag == 2 ? "  (default)" : "");
             if (const int d = Stepper("  Pose lag", v, "pl")) XrSetPoseLag(lag + d);
             const bool sh = CamHookGetScaleHead();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("  Head movement");
-            ImGui::SameLine(430.f);
+            Label("  Head movement");
             if (ImGui::Button(sh ? "x world scale  (default)" : "life size", ImVec2(0.f, 0.f))) CamHookSetScaleHead(!sh);
+            const int pr = DlaaPreset();
+            Label("  DLSS model");
+            const int presets[3] = {6, 11, 0};
+            const char* pnames[3] = {"CNN  (faster, default)", "Transformer", "Driver's choice"};
+            int sel = -1;
+            for (int i = 0; i < 3; ++i)
+                if (pr == presets[i]) sel = i;
+            const int c = Choice(pnames, 3, sel);
+            if (c >= 0) DlaaSetPreset(presets[c]);
         }
     }
 
-    // Developer keys
+    // ---- Developer: test settings and keys, not for normal play ----
     {
-        bool dev = LogVerbose();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Developer keys");
-        ImGui::SameLine(430.f);
+        const bool dev = LogVerbose();
+        Label("Developer");
         if (ImGui::Button(dev ? "On  (F1 snapshot, F2 recording, full log)" : "Off", ImVec2(0.f, 0.f))) SetDevKeys(!dev);
+        if (dev) {
+            unsigned askW = 0, askH = 0;
+            if (XrRecommendedNow(&askW, &askH)) snprintf(v, sizeof(v), "%u x %u", askW, askH);
+            else snprintf(v, sizeof(v), "-");
+            ImGui::TextDisabled("  VR runtime asked for");
+            ImGui::SameLine(430.f);
+            ImGui::TextUnformatted(v);
+            if (live != kDlssOff) {
+                const float js = DlaaJitterSign(), es = DlaaEyeSign();
+                Label("  DLSS directions");
+                if (ImGui::Button(js > 0.f ? "Jitter +" : "Jitter -")) DlaaSetSigns(-js, es);
+                ImGui::SameLine();
+                if (ImGui::Button(es > 0.f ? "Eyes +" : "Eyes -")) DlaaSetSigns(js, -es);
+            }
+            if (live >= kDlssQuality) {
+                Label("  DLSS pairing");
+                const bool prev = DlssPairPrevious();
+                if (ImGui::Button(prev ? "Previous frame" : "Same frame")) DlssSetPairPrevious(!prev);
+                ImGui::SameLine();
+                const bool sw = DlssHalvesSwapped();
+                if (ImGui::Button(sw ? "Halves swapped" : "Halves normal")) DlssSetHalvesSwapped(!sw);
+                snprintf(v, sizeof(v), "%+.2f  (offset %+.2f)", DlssMipBias(), DlssMipBiasOffset());
+                if (const int d = Stepper("  Texture mip bias", v, "mb")) DlssStepMipBiasOffset(d);
+            }
+        }
     }
 
     ImGui::Spacing();
@@ -415,6 +413,8 @@ void BuildUi() {
         XrSetPoseLag(2);
         CamHookSetScaleHead(true);
         CamHookSetHorizonLock(false);
+        DlssSetMode(kDlssOff);
+        DlaaSetPreset(6);
         SetAdvancedShown(false);
         SetDevKeys(false);
         Log("menu: settings reset to defaults");
@@ -426,16 +426,7 @@ void BuildUi() {
     ImGui::Separator();
     ImGui::TextDisabled("Both sticks / Insert: open & close.  A: select.  B: close.");
     ImGui::TextDisabled("Keys: F6 HUD size, F7 HUD mode, F8 recenter");
-    // Keep the selected row in the middle of the panel when the menu is taller than the panel.
-    {
-        ImGuiContext& g = *GImGui;
-        ImGuiWindow* w = ImGui::GetCurrentWindow();
-        static ImGuiID lastNav = 0;
-        if (g.NavWindow == w && g.NavId && g.NavId != lastNav) {
-            lastNav = g.NavId;
-            ImGui::ScrollToRect(w, ImGui::WindowRectRelToAbs(w, w->NavRectRel[0]), ImGuiScrollFlags_AlwaysCenterY | ImGuiScrollFlags_KeepVisibleEdgeX);
-        }
-    }
+    g_contentH = ImGui::GetWindowHeight();
     ImGui::End();
 }
 
@@ -494,6 +485,10 @@ void MenuInstallInputHooks() {
 bool MenuIsOpen() { return g_open.load(); }
 unsigned MenuOpenGeneration() { return g_openGen.load(); }
 ID3D11Texture2D* MenuTexture() { return g_imguiReady ? g_tex : nullptr; }
+unsigned MenuContentHeight() {
+    const unsigned h = static_cast<unsigned>(g_contentH + 0.5f);
+    return h < 200 ? 200 : h > kH ? kH : h;
+}
 
 void MenuTick(ID3D11Device* dev, ID3D11DeviceContext* c) {
     WorldScaleTick();
