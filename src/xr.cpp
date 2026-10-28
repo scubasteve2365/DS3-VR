@@ -521,10 +521,16 @@ int InitXR() {
             const ULONGLONG now = GetTickCount64();
             if (!waitStart) {
                 waitStart = now;
-                Log("XR: the VR runtime says the headset is not available yet; asking again for up to 30 s");
+                Log("XR: the VR runtime says the headset is not available yet; asking again every 2 s for up to 20 s");
             }
-            if (now - waitStart < 30000) return 2;
-            Log("XR: the headset was still not available after 30 s (is it connected and awake in your VR app?)");
+            if (now - waitStart < 20000) {
+                // Start over with a fresh connection next time: asking again on the same one crashed inside
+                // Virtual Desktop's runtime.
+                xrDestroyInstance_(g_inst);
+                g_inst = XR_NULL_HANDLE;
+                return 2;
+            }
+            Log("XR: the headset was still not available after 20 s (is it connected and awake in your VR app?)");
             return false;
         }
         if (XR_FAILED(gs)) {
@@ -1172,6 +1178,21 @@ bool TickXR() {
 
 } // namespace
 
+bool XrRuntimeIsVirtualDesktop() {
+    // The same choice as LoadRuntime: XR_RUNTIME_JSON for this launch, else the system's active runtime.
+    wchar_t manifest[1024] = {};
+    const DWORD envLen = GetEnvironmentVariableW(L"XR_RUNTIME_JSON", manifest, 1024);
+    if (!(envLen > 0 && envLen < 1024 && GetFileAttributesW(manifest) != INVALID_FILE_ATTRIBUTES)) {
+        manifest[0] = 0;
+        DWORD sz = sizeof(manifest);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Khronos\\OpenXR\\1", L"ActiveRuntime", RRF_RT_REG_SZ, nullptr, manifest,
+                         &sz) != ERROR_SUCCESS)
+            return false;
+    }
+    for (wchar_t* c = manifest; *c; ++c) *c = static_cast<wchar_t>(towlower(*c));
+    return wcsstr(manifest, L"virtualdesktop") != nullptr;
+}
+
 // Early, before the game has a window: ask the runtime what per-eye size it wants, without a session.
 bool XrQueryRecommendedHeight(unsigned* height, unsigned* width) {
     if (!LoadRuntime()) return false;
@@ -1513,13 +1534,13 @@ void XrOnPresent(ID3D11Device* device, IDXGISwapChain*) {
         Log("XR: starting (milestone G1: geo-11 stereo)");
     }
     if (!g_initDone) {
-        // While the headset is not available yet, ask again every quarter second (the game keeps running).
+        // While the headset is not available yet, ask again every 2 s (the game keeps running).
         static ULONGLONG nextTry = 0;
         const ULONGLONG now = GetTickCount64();
         if (now < nextTry) return;
         const int r = InitXR();
         if (r == 2) {
-            nextTry = now + 250;
+            nextTry = now + 2000;
             return;
         }
         g_initDone = true;

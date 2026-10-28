@@ -361,6 +361,14 @@ void RenderSizeRefreshFromHeadset() {
     std::wstring ini = std::wstring(ModuleDir()) + L"ds3vr.ini";
     if (GetPrivateProfileIntW(L"ds3vr", L"RenderHeight", 0, ini.c_str()) != 0) return;  // fixed height
     const ULONGLONG t0 = GetTickCount64();
+    // Virtual Desktop's runtime: no separate query. Its connection from the helper process left the headset
+    // "not available" to the game for several seconds afterwards (VR then stayed off for the run). The game
+    // saves the size the runtime asks for once VR is running, and the next launch uses it.
+    if (XrRuntimeIsVirtualDesktop()) {
+        Log("RENDERSIZE: Virtual Desktop's runtime: no early headset query; using the remembered height %u "
+            "(a new size from the runtime applies from the next launch)", g_h);
+        return;
+    }
     // A fresh install has no headset aspect yet: read the headset's shape too (a short VR session in the helper).
     const bool needShape = !HeadsetAspectSaved();
     unsigned want = 0;

@@ -30,6 +30,9 @@ void XrSetHudSettings(const HudSettings& h, bool save);  // save = write ds3vr.i
 void XrCycleHudSize();             // F6: HUD panel size (cycles 0.8 to 2.0 m wide, saved)
 void XrCycleHudMode();             // F7: HUD fixed / follows head / hidden           // F8: save both eyes as BMP files next to the game
 
+// True when the OpenXR runtime this launch will use is Virtual Desktop's (VDXR).
+bool XrRuntimeIsVirtualDesktop();
+
 // Asks the VR runtime for its recommended per-eye height (temporary instance, no session).
 bool XrQueryRecommendedHeight(unsigned* height, unsigned* width = nullptr);
 // Like the above, but also reads the headset's real shape (aspect from the field of view) in a short
