@@ -46,7 +46,7 @@ extern "C" HRESULT WINAPI D3DCompile(const void* data, SIZE_T size, const char* 
 namespace ds3vr {
 namespace {
 
-constexpr UINT kW = 1280, kH = 2400;  // the texture; the panel shows only the menu's height
+constexpr UINT kW = 1280, kH = 1250;  // fixed panel size (fits the glued HUD mode too); tabs instead of scrolling
 
 // ---------- gamepad (XInput) ----------
 using XInputGetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
@@ -64,6 +64,8 @@ void Filter(XINPUT_STATE* s) {
     } else {
         if (g_swallowThumbs.load(std::memory_order_relaxed))
             s->Gamepad.wButtons &= ~(XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB);
+        // Decoupled pitch "stick locked": the game never sees the right stick's up/down.
+        if (CamHookGetDecoupledPitch() == 2) s->Gamepad.sThumbRY = 0;
     }
 }
 
@@ -181,19 +183,6 @@ void SetDevKeys(bool on) {
     if (!on) LogSetVerbose(false);
 }
 
-int g_advanced = -1;  // -1 = not read from ds3vr.ini yet
-
-bool AdvancedShown() {
-    if (g_advanced < 0)
-        g_advanced = GetPrivateProfileIntW(L"ds3vr", L"AdvancedSettings", 0, (std::wstring(ModuleDir()) + L"ds3vr.ini").c_str()) != 0;
-    return g_advanced == 1;
-}
-
-void SetAdvancedShown(bool on) {
-    g_advanced = on ? 1 : 0;
-    WritePrivateProfileStringW(L"ds3vr", L"AdvancedSettings", on ? L"1" : L"0", (std::wstring(ModuleDir()) + L"ds3vr.ini").c_str());
-}
-
 // One label at the left, the controls in the column at x = 430.
 void Label(const char* text) {
     ImGui::AlignTextToFramePadding();
@@ -214,77 +203,35 @@ int Choice(const char* const* names, int n, int selected) {
     return clicked;
 }
 
-float g_contentH = 0.f;  // the menu's height last frame (the VR panel shows only that much)
+// Tabs, switched with LT / RT (or Page Up / Page Down).
+enum Tab { kTabGeneral = 0, kTabGraphics, kTabDeveloper, kTabCount };
+const char* const kTabNames[kTabCount] = {"General", "Graphics", "Developer"};
+int g_tab = kTabGeneral;
+bool g_tabJump = false;  // LT / RT switched the tab this frame: select it and put the cursor on its first row
 
-void BuildUi() {
-    ImGui::SetNextWindowPos(ImVec2(0.f, 0.f));
-    // As tall as its contents (up to the texture), so nothing has to scroll.
-    ImGui::SetNextWindowSizeConstraints(ImVec2(static_cast<float>(kW), 0.f), ImVec2(static_cast<float>(kW), static_cast<float>(kH)));
-    static unsigned focusedGen = 0;
-    if (focusedGen != g_openGen.load()) {
-        ImGui::SetNextWindowFocus();
-        focusedGen = g_openGen.load();
-    }
-    ImGui::Begin("DS3 VR", nullptr,
-                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize);
-    ImGui::TextColored(kMenuAccent, "DARK SOULS III VR");
-    ImGui::SameLine();
-    ImGui::TextDisabled("v" DS3VR_VERSION);
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    char v[160];
-    // ---- View ----
+void TabGeneral(char* v, size_t vn) {
     const float ws = WorldScaleGet();
     const char* note = ws == 1.f ? "  (life size)" : ws == 0.25f ? "  (largest)" : ws == 10.f ? "  (smallest)" : "";
-    snprintf(v, sizeof(v), ws < 1.f ? "%.2f%s" : "%.1f%s", ws, note);
+    snprintf(v, vn, ws < 1.f ? "%.2f%s" : "%.1f%s", ws, note);
     if (const int d = Stepper("World scale", v, "ws")) WorldScaleStep(d);
     {
-        const bool lock = CamHookGetHorizonLock();
-        Label("Horizon lock");
-        if (lock) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
-        if (ImGui::Button(lock ? "On  (stick does not tilt the view)" : "Off  (free camera)", ImVec2(0.f, 0.f))) CamHookSetHorizonLock(!lock);
-        if (lock) ImGui::PopStyleColor();
+        Label("Decoupled pitch");
+        const char* names[3] = {"Off", "Level", "Level + stick lock"};
+        const int c = Choice(names, 3, CamHookGetDecoupledPitch());
+        if (c >= 0) CamHookSetDecoupledPitch(c);
+        const int m = CamHookGetDecoupledPitch();
+        ImGui::TextDisabled(m == 0   ? "  The camera tilts up and down as in the flat game."
+                            : m == 1 ? "  Horizon stays level; the stick still raises and lowers the camera."
+                                     : "  Horizon stays level; the stick's up and down is ignored.");
     }
-
-    // ---- DLSS: Off and DLAA switch now; the upscaling modes change the render size (next launch) ----
-    const int saved = DlssModeSaved(), live = DlssModeNow();
     {
-        const bool noDlss = DlssAvailable() == 0;
-        auto modeButton = [&](int m, const char* label) {
-            const bool sel = saved == m;
-            if (sel) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
-            if (noDlss && m != kDlssOff) ImGui::BeginDisabled();
-            if (ImGui::Button(label) && !sel) DlssSetMode(m);
-            if (noDlss && m != kDlssOff) ImGui::EndDisabled();
-            if (sel) ImGui::PopStyleColor();
-        };
-        Label("NVIDIA DLSS");
-        modeButton(kDlssOff, "Off");
-        ImGui::SameLine();
-        modeButton(kDlssDlaa, "DLAA");
-        ImGui::SameLine();
-        modeButton(kDlssQuality, "Quality");
-        ImGui::SetCursorPosX(430.f);
-        modeButton(kDlssBalanced, "Balanced");
-        ImGui::SameLine();
-        modeButton(kDlssPerformance, "Performance");
-        ImGui::SameLine();
-        modeButton(kDlssUltraPerformance, "Ultra Perf");
-        if (saved != kDlssOff || live != kDlssOff || noDlss) {
-            ImGui::TextDisabled("  Status");
-            ImGui::SameLine(430.f);
-            ImGui::TextDisabled("%s", DlssStatus());
-        }
-        if (saved >= kDlssQuality && saved != live) {
-            ImGui::SetCursorPosX(430.f);
-            ImGui::TextDisabled("Upscaling modes apply when you restart the game.");
-        }
+        const bool sh = CamHookGetScaleHead();
+        Label("Head movement");
+        const char* names[2] = {"x world scale", "Life size"};
+        const int c = Choice(names, 2, sh ? 0 : 1);
+        if (c >= 0) CamHookSetScaleHead(c == 0);
     }
     ImGui::Spacing();
-
-    // ---- HUD ----
     HudSettings h = XrGetHudSettings();
     bool changed = false;
     {
@@ -296,137 +243,194 @@ void BuildUi() {
             changed = true;
         }
     }
-    snprintf(v, sizeof(v), "%.1f m wide", h.width);
+    snprintf(v, vn, "%.1f m wide", h.width);
     if (const int d = Stepper("HUD size", v, "hw")) { h.width += 0.1f * d; changed = true; }
-    snprintf(v, sizeof(v), "%.1f m away", h.distance);
+    snprintf(v, vn, "%.1f m away", h.distance);
     if (const int d = Stepper("HUD distance", v, "hd")) { h.distance += 0.1f * d; changed = true; }
-    snprintf(v, sizeof(v), h.drop >= 0.f ? "%.2f m below eyes" : "%.2f m above eyes", std::fabs(h.drop));
+    snprintf(v, vn, h.drop >= 0.f ? "%.2f m below eyes" : "%.2f m above eyes", std::fabs(h.drop));
     if (const int d = Stepper("HUD height", v, "hh")) { h.drop -= 0.05f * d; changed = true; }
     if (changed) XrSetHudSettings(h, true);
+    ImGui::Spacing();
+    Label("View");
+    if (ImGui::Button("Recenter view")) XrRecenter();
+}
 
-    // ---- Resolution (read-only) ----
+void TabGraphics(char* v, size_t vn) {
+    const int saved = DlssModeSaved(), live = DlssModeNow();
+    const bool noDlss = DlssAvailable() == 0;
+    auto modeButton = [&](int m, const char* label) {
+        const bool sel = saved == m;
+        if (sel) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
+        if (noDlss && m != kDlssOff) ImGui::BeginDisabled();
+        if (ImGui::Button(label) && !sel) DlssSetMode(m);
+        if (noDlss && m != kDlssOff) ImGui::EndDisabled();
+        if (sel) ImGui::PopStyleColor();
+    };
+    Label("NVIDIA DLSS");
+    modeButton(kDlssOff, "Off");
+    ImGui::SameLine();
+    modeButton(kDlssDlaa, "DLAA");
+    ImGui::SameLine();
+    modeButton(kDlssQuality, "Quality");
+    ImGui::SetCursorPosX(430.f);
+    modeButton(kDlssBalanced, "Balanced");
+    ImGui::SameLine();
+    modeButton(kDlssPerformance, "Performance");
+    ImGui::SameLine();
+    modeButton(kDlssUltraPerformance, "Ultra Perf");
+    ImGui::TextDisabled("  Status");
+    ImGui::SameLine(430.f);
+    ImGui::TextDisabled("%s", DlssStatus());
+    if (saved >= kDlssQuality && saved != live) {
+        ImGui::SetCursorPosX(430.f);
+        ImGui::TextDisabled("Upscaling modes apply when you restart the game.");
+    }
+    ImGui::TextDisabled("  DLAA: smoother edges.  Quality to Ultra Perf: more frame rate.");
     {
-        unsigned ew = 0, eh = 0, cw = 0, ch = 0, nw = 0, nh = 0;
-        bool fixed = false;
-        const bool haveNow = XrEyeImageSize(&ew, &eh);
-        const bool haveCfg = RenderSizeGet(&cw, &ch);
-        const bool haveNext = RenderSizeNextLaunch(&nw, &nh, &fixed);
+        const int pr = DlaaPreset();
+        Label("DLSS model");
+        const int presets[3] = {6, 11, 0};
+        const char* pnames[3] = {"CNN (faster)", "Transformer", "Auto"};
+        int sel = -1;
+        for (int i = 0; i < 3; ++i)
+            if (pr == presets[i]) sel = i;
+        const int c = Choice(pnames, 3, sel);
+        if (c >= 0) DlaaSetPreset(presets[c]);
+    }
+    ImGui::Spacing();
+    unsigned ew = 0, eh = 0, cw = 0, ch = 0, nw = 0, nh = 0;
+    bool fixed = false;
+    const bool haveNow = XrEyeImageSize(&ew, &eh);
+    const bool haveCfg = RenderSizeGet(&cw, &ch);
+    const bool haveNext = RenderSizeNextLaunch(&nw, &nh, &fixed);
+    ImGui::TextUnformatted("Resolution per eye");
+    if (haveNow) snprintf(v, vn, "%u x %u", ew, eh);
+    else snprintf(v, vn, "-");
+    ImGui::TextDisabled(DlssUpscaling() ? "  Game renders" : "  Game now");
+    ImGui::SameLine(430.f);
+    ImGui::TextUnformatted(v);
+    unsigned uw = 0, uh = 0;
+    if (DlssUpscaling() && DlssOutputSize(&uw, &uh)) {
+        snprintf(v, vn, "%u x %u  (DLSS %s)", uw, uh, DlssModeName(DlssModeNow()));
+        ImGui::TextDisabled("  Headset gets");
+        ImGui::SameLine(430.f);
+        ImGui::TextUnformatted(v);
+    }
+    if (haveNext) {
+        const bool same = haveCfg && nw == cw && nh == ch;
+        snprintf(v, vn, "%u x %u%s%s", nw, nh, fixed ? "  (fixed in ds3vr.ini)" : "", same ? "  (same as now)" : "  (restart to apply)");
+        const int sm = DlssModeSaved();
+        if (sm >= kDlssQuality && DlssAvailable() == 1) {
+            const size_t n = strlen(v);
+            const float sc = DlssModeScale(sm);
+            snprintf(v + n, vn - n, ", renders %u x %u", static_cast<unsigned>(static_cast<float>(nw) * sc + 0.5f) & ~1u,
+                     static_cast<unsigned>(static_cast<float>(nh) * sc + 0.5f) & ~1u);
+        }
+    } else {
+        snprintf(v, vn, "game's own setting (RenderHeight=-1)");
+    }
+    ImGui::TextDisabled("  Next launch");
+    ImGui::SameLine(430.f);
+    ImGui::TextUnformatted(v);
+    ImGui::TextDisabled("  Set in your VR runtime (SteamVR, Virtual Desktop, Meta, Pimax Play).");
+    ImGui::TextDisabled("  The game reads it each time it starts.");
+}
+
+void TabDeveloper(char* v, size_t vn) {
+    const bool dev = LogVerbose();
+    Label("Developer mode");
+    if (ImGui::Button(dev ? "On" : "Off", ImVec2(0.f, 0.f))) SetDevKeys(!dev);
+    if (dev) ImGui::TextDisabled("  Full log; F1 saves both eyes, F2 records one frame's draw calls.");
+    if (!dev) {
         ImGui::Spacing();
-        ImGui::TextUnformatted("Resolution per eye");
-        if (haveNow) snprintf(v, sizeof(v), "%u x %u", ew, eh);
-        else snprintf(v, sizeof(v), "-");
-        ImGui::TextDisabled(DlssUpscaling() ? "  Game renders" : "  Game now");
-        ImGui::SameLine(430.f);
-        ImGui::TextUnformatted(v);
-        unsigned uw = 0, uh = 0;
-        if (DlssUpscaling() && DlssOutputSize(&uw, &uh)) {
-            snprintf(v, sizeof(v), "%u x %u  (DLSS %s)", uw, uh, DlssModeName(DlssModeNow()));
-            ImGui::TextDisabled("  Headset gets");
-            ImGui::SameLine(430.f);
-            ImGui::TextUnformatted(v);
-        }
-        if (haveNext) {
-            const bool same = haveCfg && nw == cw && nh == ch;
-            snprintf(v, sizeof(v), "%u x %u%s%s", nw, nh, fixed ? "  (fixed in ds3vr.ini)" : "", same ? "  (same as now)" : "  (restart the game to apply)");
-            const int sm = DlssModeSaved();
-            if (sm >= kDlssQuality && DlssAvailable() == 1) {
-                const size_t n = strlen(v);
-                const float sc = DlssModeScale(sm);
-                snprintf(v + n, sizeof(v) - n, ", renders %u x %u", static_cast<unsigned>(static_cast<float>(nw) * sc + 0.5f) & ~1u,
-                         static_cast<unsigned>(static_cast<float>(nh) * sc + 0.5f) & ~1u);
-            }
-        } else {
-            snprintf(v, sizeof(v), "game's own setting (RenderHeight=-1)");
-        }
-        ImGui::TextDisabled("  Next launch");
-        ImGui::SameLine(430.f);
-        ImGui::TextUnformatted(v);
-        ImGui::TextDisabled("  Set in your VR runtime (SteamVR, Virtual Desktop, Meta, Pimax Play).");
-        ImGui::TextDisabled("  The game reads it each time it starts.");
+        ImGui::TextDisabled("  Test settings for troubleshooting. Normal play does not need them.");
+        return;
     }
-    ImGui::Spacing();
-
-    // ---- Advanced: settings a player may want, hidden until asked for ----
-    {
-        const bool adv = AdvancedShown();
-        Label("Advanced settings");
-        if (ImGui::Button(adv ? "Shown" : "Hidden", ImVec2(0.f, 0.f))) SetAdvancedShown(!adv);
-        if (adv) {
-            const int lag = XrGetPoseLag();
-            snprintf(v, sizeof(v), "%d%s", lag, lag == 2 ? "  (default)" : "");
-            if (const int d = Stepper("  Pose lag", v, "pl")) XrSetPoseLag(lag + d);
-            const bool sh = CamHookGetScaleHead();
-            Label("  Head movement");
-            if (ImGui::Button(sh ? "x world scale  (default)" : "life size", ImVec2(0.f, 0.f))) CamHookSetScaleHead(!sh);
-            const int pr = DlaaPreset();
-            Label("  DLSS model");
-            const int presets[3] = {6, 11, 0};
-            const char* pnames[3] = {"CNN  (faster, default)", "Transformer", "Driver's choice"};
-            int sel = -1;
-            for (int i = 0; i < 3; ++i)
-                if (pr == presets[i]) sel = i;
-            const int c = Choice(pnames, 3, sel);
-            if (c >= 0) DlaaSetPreset(presets[c]);
-        }
+    const int lag = XrGetPoseLag();
+    snprintf(v, vn, "%d%s", lag, lag == 2 ? "  (default)" : "");
+    if (const int d = Stepper("Pose lag", v, "pl")) XrSetPoseLag(lag + d);
+    unsigned askW = 0, askH = 0;
+    if (XrRecommendedNow(&askW, &askH)) snprintf(v, vn, "%u x %u", askW, askH);
+    else snprintf(v, vn, "-");
+    ImGui::TextDisabled("  VR runtime asked for");
+    ImGui::SameLine(430.f);
+    ImGui::TextUnformatted(v);
+    const int live = DlssModeNow();
+    if (live != kDlssOff) {
+        const float js = DlaaJitterSign(), es = DlaaEyeSign();
+        Label("DLSS directions");
+        if (ImGui::Button(js > 0.f ? "Jitter +" : "Jitter -")) DlaaSetSigns(-js, es);
+        ImGui::SameLine();
+        if (ImGui::Button(es > 0.f ? "Eyes +" : "Eyes -")) DlaaSetSigns(js, -es);
     }
+    if (live >= kDlssQuality) {
+        Label("DLSS pairing");
+        const bool prev = DlssPairPrevious();
+        if (ImGui::Button(prev ? "Previous frame" : "Same frame")) DlssSetPairPrevious(!prev);
+        ImGui::SameLine();
+        const bool sw = DlssHalvesSwapped();
+        if (ImGui::Button(sw ? "Halves swapped" : "Halves normal")) DlssSetHalvesSwapped(!sw);
+        snprintf(v, vn, "%+.2f  (offset %+.2f)", DlssMipBias(), DlssMipBiasOffset());
+        if (const int d = Stepper("Texture mip bias", v, "mb")) DlssStepMipBiasOffset(d);
+    }
+}
 
-    // ---- Developer: test settings and keys, not for normal play ----
-    {
-        const bool dev = LogVerbose();
-        Label("Developer");
-        if (ImGui::Button(dev ? "On  (F1 snapshot, F2 recording, full log)" : "Off", ImVec2(0.f, 0.f))) SetDevKeys(!dev);
-        if (dev) {
-            unsigned askW = 0, askH = 0;
-            if (XrRecommendedNow(&askW, &askH)) snprintf(v, sizeof(v), "%u x %u", askW, askH);
-            else snprintf(v, sizeof(v), "-");
-            ImGui::TextDisabled("  VR runtime asked for");
-            ImGui::SameLine(430.f);
-            ImGui::TextUnformatted(v);
-            if (live != kDlssOff) {
-                const float js = DlaaJitterSign(), es = DlaaEyeSign();
-                Label("  DLSS directions");
-                if (ImGui::Button(js > 0.f ? "Jitter +" : "Jitter -")) DlaaSetSigns(-js, es);
-                ImGui::SameLine();
-                if (ImGui::Button(es > 0.f ? "Eyes +" : "Eyes -")) DlaaSetSigns(js, -es);
-            }
-            if (live >= kDlssQuality) {
-                Label("  DLSS pairing");
-                const bool prev = DlssPairPrevious();
-                if (ImGui::Button(prev ? "Previous frame" : "Same frame")) DlssSetPairPrevious(!prev);
-                ImGui::SameLine();
-                const bool sw = DlssHalvesSwapped();
-                if (ImGui::Button(sw ? "Halves swapped" : "Halves normal")) DlssSetHalvesSwapped(!sw);
-                snprintf(v, sizeof(v), "%+.2f  (offset %+.2f)", DlssMipBias(), DlssMipBiasOffset());
-                if (const int d = Stepper("  Texture mip bias", v, "mb")) DlssStepMipBiasOffset(d);
+void BuildUi() {
+    ImGui::SetNextWindowPos(ImVec2(0.f, 0.f));
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(kW), static_cast<float>(kH)));
+    static unsigned focusedGen = 0;
+    if (focusedGen != g_openGen.load()) {
+        ImGui::SetNextWindowFocus();
+        focusedGen = g_openGen.load();
+    }
+    ImGui::Begin("DS3 VR", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::TextColored(kMenuAccent, "DARK SOULS III VR");
+    ImGui::SameLine();
+    ImGui::TextDisabled("v" DS3VR_VERSION);
+
+    char v[160];
+    // The tab area takes the space left above the footer (buttons and the controls line).
+    const float footer = ImGui::GetFrameHeightWithSpacing() + 3.f * ImGui::GetTextLineHeightWithSpacing() + 4.f * ImGui::GetStyle().ItemSpacing.y;
+    if (ImGui::BeginTabBar("tabs", ImGuiTabBarFlags_NoTooltip)) {
+        for (int t = 0; t < kTabCount; ++t) {
+            const ImGuiTabItemFlags f = (g_tabJump && t == g_tab) ? ImGuiTabItemFlags_SetSelected : 0;
+            if (ImGui::BeginTabItem(kTabNames[t], nullptr, f)) {
+                if (!g_tabJump) g_tab = t;  // a tab picked with the cursor also counts
+                ImGui::BeginChild("page", ImVec2(0.f, -footer), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
+                ImGui::Spacing();
+                if (g_tabJump) ImGui::SetKeyboardFocusHere();
+                if (t == kTabGeneral) TabGeneral(v, sizeof(v));
+                else if (t == kTabGraphics) TabGraphics(v, sizeof(v));
+                else TabDeveloper(v, sizeof(v));
+                ImGui::EndChild();
+                ImGui::EndTabItem();
             }
         }
+        ImGui::EndTabBar();
     }
+    g_tabJump = false;
 
-    ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-    if (ImGui::Button("Recenter view", ImVec2(380.f, 0.f))) XrRecenter();
-    ImGui::SameLine();
     if (ImGui::Button("Reset to defaults", ImVec2(380.f, 0.f))) {
         XrSetHudSettings(HudSettings{0, 1.0f, 1.2f, 0.10f}, true);
         WorldScaleSet(1.f);
         XrSetPoseLag(2);
         CamHookSetScaleHead(true);
-        CamHookSetHorizonLock(false);
+        CamHookSetDecoupledPitch(0);
         DlssSetMode(kDlssOff);
         DlaaSetPreset(6);
-        SetAdvancedShown(false);
         SetDevKeys(false);
         Log("menu: settings reset to defaults");
     }
     ImGui::SameLine();
     if (ImGui::Button("Close", ImVec2(380.f, 0.f))) g_wantClose = true;
-
     ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::TextDisabled("Both sticks / Insert: open & close.  A: select.  B: close.");
-    ImGui::TextDisabled("Keys: F6 HUD size, F7 HUD mode, F8 recenter");
-    g_contentH = ImGui::GetWindowHeight();
+    ImGui::TextDisabled("Both sticks or Insert: open and close.  A: select.  B: close.");
+    ImGui::TextDisabled("LT / RT or Page Up / Page Down: change tab.");
+    ImGui::TextDisabled("Keys: F6 HUD size, F7 HUD mode, F8 recenter.");
     ImGui::End();
 }
 
@@ -485,10 +489,7 @@ void MenuInstallInputHooks() {
 bool MenuIsOpen() { return g_open.load(); }
 unsigned MenuOpenGeneration() { return g_openGen.load(); }
 ID3D11Texture2D* MenuTexture() { return g_imguiReady ? g_tex : nullptr; }
-unsigned MenuContentHeight() {
-    const unsigned h = static_cast<unsigned>(g_contentH + 0.5f);
-    return h < 200 ? 200 : h > kH ? kH : h;
-}
+unsigned MenuContentHeight() { return kH; }
 
 void MenuTick(ID3D11Device* dev, ID3D11DeviceContext* c) {
     WorldScaleTick();
@@ -543,6 +544,23 @@ void MenuTick(ID3D11Device* dev, ID3D11DeviceContext* c) {
     io.AddKeyEvent(ImGuiKey_LeftArrow, KeyDown(VK_LEFT));
     io.AddKeyEvent(ImGuiKey_RightArrow, KeyDown(VK_RIGHT));
     io.AddKeyEvent(ImGuiKey_Enter, KeyDown(VK_RETURN));
+    // LT / RT (or Page Up / Page Down): previous / next tab.
+    {
+        static bool ltWas = false, rtWas = false, puWas = false, pdWas = false;
+        const bool lt = havePad && pad.bLeftTrigger > 128, rt = havePad && pad.bRightTrigger > 128;
+        const bool pu = KeyDown(VK_PRIOR), pd = KeyDown(VK_NEXT);
+        int dir = 0;
+        if ((lt && !ltWas) || (pu && !puWas)) dir = -1;
+        if ((rt && !rtWas) || (pd && !pdWas)) dir = +1;
+        ltWas = lt;
+        rtWas = rt;
+        puWas = pu;
+        pdWas = pd;
+        if (dir) {
+            g_tab = (g_tab + dir + kTabCount) % kTabCount;
+            g_tabJump = true;
+        }
+    }
     // B (or Backspace) closes the menu.
     static bool backWas = false;
     const bool back = (b & XINPUT_GAMEPAD_B) != 0 || KeyDown(VK_BACK);

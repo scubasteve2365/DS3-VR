@@ -32,9 +32,13 @@ bool CamHookMarkerParams(int lag, float out[16]);
 bool CamHookGetScaleHead();
 void CamHookSetScaleHead(bool on);  // from the menu (developer section): applied now and saved
 
-// Horizon lock (VR menu, ds3vr.ini HorizonLock, default off): the right stick no longer tilts the view up
-// or down; the view stays level and only your head pitches it.
-bool CamHookGetHorizonLock();
-void CamHookSetHorizonLock(bool on);
+// Decoupled pitch (VR menu, ds3vr.ini HorizonLock, default 0), as in UEVR:
+// 0 off: the game camera as in the flat game.
+// 1 level view: the game camera's up/down tilt is removed, so the horizon stays level and only your head
+//   pitches the view. In third person the camera still moves up and down its orbit with the stick.
+// 2 level view, stick locked: as 1, and the right stick's up/down is ignored (menu.cpp's gamepad filter),
+//   so the camera keeps the game's height behind the character (the game may still move it, e.g. lock-on).
+int CamHookGetDecoupledPitch();
+void CamHookSetDecoupledPitch(int mode);
 
 } // namespace ds3vr

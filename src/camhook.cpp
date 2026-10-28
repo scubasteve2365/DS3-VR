@@ -99,7 +99,7 @@ Vec3 g_refP{0, 0, 0};
 std::atomic<bool> g_recenterReq{true};
 std::atomic<bool> g_headTrack{true};
 std::atomic<bool> g_scaleHead{true};  // ds3vr.ini ScaleHeadMovement
-std::atomic<bool> g_horizonLock{false};  // ds3vr.ini HorizonLock (VR menu): off = the stick tilts the view as in the flat game
+std::atomic<int> g_horizonLock{0};  // ds3vr.ini HorizonLock (VR menu "Decoupled pitch"): 0 off, 1 level view, 2 level view + stick locked
 float g_pullback = 0.f;  // ds3vr.ini CameraPullback: extra metres behind the game's camera
 float g_fovY = 0.f;  // ds3vr.ini FovY (degrees -> radians); 0 = automatic (from the headset)
 std::atomic<float> g_autoFovY{0.f};  // from the headset field of view, used when FovY=0
@@ -215,7 +215,7 @@ void ExportDetour(void* self, void* out) {
             if (fy > 0.f) cam[16] = fy;  // +0x50: vertical field of view used for projection and culling
             if (g_pullback != 0.f)
                 for (int a = 0; a < 3; ++a) cam[12 + a] -= g_pullback * cam[8 + a];  // back along the forward row
-            if (g_horizonLock.load(std::memory_order_relaxed)) LevelCamera(cam);
+            if (g_horizonLock.load(std::memory_order_relaxed) != 0) LevelCamera(cam);
             ApplyHead(cam, q, p);
             const uint64_t seq = g_appliedSeq.load(std::memory_order_relaxed) + 1;
             Applied& a = g_applied[seq % kRing];
@@ -281,7 +281,10 @@ void Init() {
         g_fovY = (deg >= 30.f && deg <= 130.f) ? deg * 3.14159265f / 180.f : 0.f;
         Log("CAMHOOK: vertical field of view %s", g_fovY > 0.f ? "from ds3vr.ini" : "automatic (from the headset)");
         g_scaleHead.store(GetPrivateProfileIntW(L"ds3vr", L"ScaleHeadMovement", 1, ini.c_str()) != 0);
-        g_horizonLock.store(GetPrivateProfileIntW(L"ds3vr", L"HorizonLock", 0, ini.c_str()) != 0);
+        {
+            const int hl = static_cast<int>(GetPrivateProfileIntW(L"ds3vr", L"HorizonLock", 0, ini.c_str()));
+            g_horizonLock.store(hl < 0 ? 0 : hl > 2 ? 2 : hl);
+        }
         GetPrivateProfileStringW(L"ds3vr", L"CameraPullback", L"0", v, 32, ini.c_str());
         g_pullback = static_cast<float>(_wtof(v));
         if (g_pullback < -5.f || g_pullback > 20.f) g_pullback = 0.f;
@@ -386,12 +389,15 @@ bool CamHookMarkerParams(int lag, float out[16]) {
     return true;
 }
 
-bool CamHookGetHorizonLock() { return g_horizonLock.load(); }
+int CamHookGetDecoupledPitch() { return g_horizonLock.load(); }
 
-void CamHookSetHorizonLock(bool on) {
-    g_horizonLock.store(on);
-    WritePrivateProfileStringW(L"ds3vr", L"HorizonLock", on ? L"1" : L"0", (std::wstring(ModuleDir()) + L"ds3vr.ini").c_str());
-    Log("menu: horizon lock %s", on ? "on (the stick no longer tilts the view)" : "off (free camera)");
+void CamHookSetDecoupledPitch(int mode) {
+    if (mode < 0 || mode > 2) mode = 0;
+    g_horizonLock.store(mode);
+    wchar_t v[4];
+    swprintf(v, 4, L"%d", mode);
+    WritePrivateProfileStringW(L"ds3vr", L"HorizonLock", v, (std::wstring(ModuleDir()) + L"ds3vr.ini").c_str());
+    Log("menu: decoupled pitch %s", mode == 0 ? "off" : mode == 1 ? "level view" : "level view, stick up/down locked");
 }
 
 bool CamHookGetScaleHead() { return g_scaleHead.load(); }
