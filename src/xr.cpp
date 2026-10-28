@@ -21,6 +21,7 @@
 #include "camhook.h"
 #include "dlss.h"
 #include "rendersize.h"
+#include "sharpen.h"
 #include "hud.h"
 #include "menu.h"
 #include "log.h"
@@ -249,6 +250,7 @@ ULONGLONG g_lastLog = 0;
 // One double-width swapchain: left eye in the left half, right eye in the right half.
 XrSwapchain g_sc = XR_NULL_HANDLE;
 std::vector<ID3D11Texture2D*> g_scImgs;
+DXGI_FORMAT g_scFmt = DXGI_FORMAT_UNKNOWN;  // the stereo swapchain's format (sharpening draws with it)
 UINT g_scW = 0, g_scH = 0;
 DXGI_FORMAT g_scSrcFmt = DXGI_FORMAT_UNKNOWN;
 bool g_scFailed = false;
@@ -618,6 +620,7 @@ bool CreateSwapchain(UINT w, UINT h, DXGI_FORMAT srcFmt) {
     g_scW = w;
     g_scH = h;
     g_scSrcFmt = srcFmt;
+    g_scFmt = chosen;
     Log("XR: stereo swapchain %ux%u format %d, %u images", w, h, static_cast<int>(chosen), ni);
     return true;
 }
@@ -995,6 +998,7 @@ bool TickXR() {
                 } else {
                     ctx->CopySubresourceRegion(g_scImgs[idx], 0, 0, 0, 0, src, 0, nullptr);
                 }
+                SharpenStereo(ctx, g_scImgs[idx], g_scFmt);  // off unless chosen in the menu
                 if (g_capture.exchange(false)) CaptureStereo(ctx, src);
             }
             if (g_kMutex && locked) g_kMutex->ReleaseSync(0);

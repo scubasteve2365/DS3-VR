@@ -19,6 +19,7 @@
 #include "log.h"
 #include "menu_font.h"
 #include "rendersize.h"
+#include "sharpen.h"
 #include "version.h"
 #include "worldscale.h"
 #include "xr.h"
@@ -145,6 +146,23 @@ bool InitImGui(ID3D11Device* dev, ID3D11DeviceContext* c) {
     st.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.27f, 0.23f, 0.16f, 1.f);
     st.Colors[ImGuiCol_ButtonActive] = ImVec4(0.37f, 0.30f, 0.18f, 1.f);
     st.Colors[ImGuiCol_NavCursor] = kMenuAccent;
+    // Tabs in the same warm palette (ImGui's default tabs are blue).
+    st.Colors[ImGuiCol_Tab] = ImVec4(0.16f, 0.14f, 0.11f, 1.f);
+    st.Colors[ImGuiCol_TabHovered] = ImVec4(0.37f, 0.30f, 0.18f, 1.f);
+    st.Colors[ImGuiCol_TabSelected] = kMenuSelected;
+    st.Colors[ImGuiCol_TabSelectedOverline] = kMenuAccent;
+    st.Colors[ImGuiCol_TabDimmed] = ImVec4(0.12f, 0.10f, 0.08f, 1.f);
+    st.Colors[ImGuiCol_TabDimmedSelected] = kMenuSelected;
+    st.Colors[ImGuiCol_TabDimmedSelectedOverline] = kMenuAccent;
+    st.Colors[ImGuiCol_Header] = ImVec4(0.27f, 0.23f, 0.16f, 1.f);
+    st.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.37f, 0.30f, 0.18f, 1.f);
+    st.Colors[ImGuiCol_HeaderActive] = kMenuSelected;
+    st.Colors[ImGuiCol_FrameBg] = ImVec4(0.16f, 0.14f, 0.11f, 1.f);
+    st.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.27f, 0.23f, 0.16f, 1.f);
+    st.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.37f, 0.30f, 0.18f, 1.f);
+    st.Colors[ImGuiCol_SliderGrab] = kMenuAccent;
+    st.Colors[ImGuiCol_SliderGrabActive] = kMenuAccent;
+    st.Colors[ImGuiCol_CheckMark] = kMenuAccent;
     if (!ImGui_ImplDX11_Init(dev, c)) {
         Log("menu: ImGui DX11 backend failed to start");
         return false;
@@ -297,6 +315,13 @@ void TabGraphics(char* v, size_t vn) {
         const int c = Choice(pnames, 3, sel);
         if (c >= 0) DlaaSetPreset(presets[c]);
     }
+    {
+        Label("Sharpening");
+        const char* names[kSharpenLevels];
+        for (int i = 0; i < kSharpenLevels; ++i) names[i] = SharpenLevelName(i);
+        const int c = Choice(names, kSharpenLevels, SharpenLevel());
+        if (c >= 0) SharpenSetLevel(c);
+    }
     ImGui::Spacing();
     unsigned ew = 0, eh = 0, cw = 0, ch = 0, nw = 0, nh = 0;
     bool fixed = false;
@@ -422,6 +447,7 @@ void BuildUi() {
         CamHookSetDecoupledPitch(0);
         DlssSetMode(kDlssOff);
         DlaaSetPreset(6);
+        SharpenSetLevel(0);
         SetDevKeys(false);
         Log("menu: settings reset to defaults");
     }
@@ -429,7 +455,7 @@ void BuildUi() {
     if (ImGui::Button("Close", ImVec2(380.f, 0.f))) g_wantClose = true;
     ImGui::Spacing();
     ImGui::TextDisabled("Both sticks or Insert: open and close.  A: select.  B: close.");
-    ImGui::TextDisabled("LT / RT or Page Up / Page Down: change tab.");
+    ImGui::TextDisabled("LB / RB or LT / RT (Page Up / Page Down): change tab.");
     ImGui::TextDisabled("Keys: F6 HUD size, F7 HUD mode, F8 recenter.");
     ImGui::End();
 }
@@ -544,10 +570,12 @@ void MenuTick(ID3D11Device* dev, ID3D11DeviceContext* c) {
     io.AddKeyEvent(ImGuiKey_LeftArrow, KeyDown(VK_LEFT));
     io.AddKeyEvent(ImGuiKey_RightArrow, KeyDown(VK_RIGHT));
     io.AddKeyEvent(ImGuiKey_Enter, KeyDown(VK_RETURN));
-    // LT / RT (or Page Up / Page Down): previous / next tab.
+    // LT / RT, LB / RB (or Page Up / Page Down): previous / next tab.
     {
         static bool ltWas = false, rtWas = false, puWas = false, pdWas = false;
-        const bool lt = havePad && pad.bLeftTrigger > 128, rt = havePad && pad.bRightTrigger > 128;
+        // Triggers or bumpers.
+        const bool lt = havePad && (pad.bLeftTrigger > 128 || (pad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0);
+        const bool rt = havePad && (pad.bRightTrigger > 128 || (pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0);
         const bool pu = KeyDown(VK_PRIOR), pd = KeyDown(VK_NEXT);
         int dir = 0;
         if ((lt && !ltWas) || (pu && !puWas)) dir = -1;

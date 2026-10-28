@@ -15,11 +15,15 @@
 
 #include "MinHook.h"
 #include "dlss.h"
+#include "sharpen.h"
 #include "hud.h"
 #include "log.h"
 
 namespace ds3vr {
 namespace {
+
+// Our own work on the immediate context (DLSS, sharpening): the HUD and probe logic leave it alone.
+bool ModDrawing() { return DlaaBusy() || SharpenBusy(); }
 
 // ID3D11DeviceContext vtable slots
 constexpr int kDrawIndexed = 12, kDraw = 13, kDrawIndexedInstanced = 20, kDrawInstanced = 21, kOMSetRenderTargets = 33,
@@ -497,7 +501,7 @@ void STDMETHODCALLTYPE DrawIndexedT(ID3D11DeviceContext* c, UINT n, UINT start, 
         Add("%u DrawIndexed %u start %u base %d", ++g_seq, n, start, base);
         DrawState(c);
     }
-    if (!D && c == g_ctx && !DlaaBusy()) {
+    if (!D && c == g_ctx && !ModDrawing()) {
         StereoProbe(c);
         if (!HudBeforeDraw(c, n, true)) return;
     }
@@ -510,7 +514,7 @@ void STDMETHODCALLTYPE DrawT(ID3D11DeviceContext* c, UINT n, UINT start) {
         Add("%u Draw %u start %u", ++g_seq, n, start);
         DrawState(c);
     }
-    if (!D && c == g_ctx && !DlaaBusy()) {
+    if (!D && c == g_ctx && !ModDrawing()) {
         DlaaBeforeDraw(c);
         StereoProbe(c);
         if (!HudBeforeDraw(c, n, false)) return;
@@ -524,7 +528,7 @@ void STDMETHODCALLTYPE DrawIndexedInstancedT(ID3D11DeviceContext* c, UINT n, UIN
         Add("%u DrawIndexedInstanced %u x%u start %u base %d si %u", ++g_seq, n, inst, start, base, si);
         DrawState(c);
     }
-    if (!D && c == g_ctx && !DlaaBusy()) {
+    if (!D && c == g_ctx && !ModDrawing()) {
         StereoProbe(c);
         if (!HudBeforeDraw(c, n, true)) return;
     }
@@ -537,7 +541,7 @@ void STDMETHODCALLTYPE DrawInstancedT(ID3D11DeviceContext* c, UINT n, UINT inst,
         Add("%u DrawInstanced %u x%u start %u si %u", ++g_seq, n, inst, start, si);
         DrawState(c);
     }
-    if (!D && c == g_ctx && !DlaaBusy()) {
+    if (!D && c == g_ctx && !ModDrawing()) {
         StereoProbe(c);
         if (!HudBeforeDraw(c, n, false)) return;
     }
@@ -552,8 +556,8 @@ void STDMETHODCALLTYPE OMSetRTT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTarg
         Add("%u SetRT n%u%s ds:%s\n", ++g_seq, n, s.c_str(), Dsv(dsv).c_str());
     }
     (D ? d_OMSetRT : o_OMSetRT)(c, n, rtv, dsv);
-    if (!DlaaBusy() || c != g_ctx) DlaaOnSetRenderTargets(n, rtv, dsv);
-    if (!D && c == g_ctx && !DlaaBusy()) HudOnSetRenderTargets(c, n, rtv, dsv);
+    if (!ModDrawing() || c != g_ctx) DlaaOnSetRenderTargets(n, rtv, dsv);
+    if (!D && c == g_ctx && !ModDrawing()) HudOnSetRenderTargets(c, n, rtv, dsv);
 }
 template <bool D>
 void STDMETHODCALLTYPE OMSetRTUAVT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* rtv, ID3D11DepthStencilView* dsv,
@@ -569,8 +573,8 @@ void STDMETHODCALLTYPE OMSetRTUAVT(ID3D11DeviceContext* c, UINT n, ID3D11RenderT
             n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL ? Dsv(dsv).c_str() : "keep", us, un, u.c_str());
     }
     (D ? d_OMSetRTUAV : o_OMSetRTUAV)(c, n, rtv, dsv, us, un, uav, cnt);
-    if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && (!DlaaBusy() || c != g_ctx)) DlaaOnSetRenderTargets(n, rtv, dsv);
-    if (!D && c == g_ctx && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && !DlaaBusy()) HudOnSetRenderTargets(c, n, rtv, dsv);
+    if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && (!ModDrawing() || c != g_ctx)) DlaaOnSetRenderTargets(n, rtv, dsv);
+    if (!D && c == g_ctx && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && !ModDrawing()) HudOnSetRenderTargets(c, n, rtv, dsv);
 }
 template <bool D>
 void STDMETHODCALLTYPE CopySubT(ID3D11DeviceContext* c, ID3D11Resource* dst, UINT ds, UINT x, UINT y, UINT z, ID3D11Resource* src,

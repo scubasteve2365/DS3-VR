@@ -120,3 +120,31 @@ including PPMd var.H by Dmitry Shkarin. This code is in the public domain.
 === EB Garamond (SIL Open Font License 1.1) ===
 The menu font (src/menu_font.h) is a subset of EB Garamond, Copyright 2017 The EB Garamond
 Project Authors (https://github.com/octaviopardo/EBGaramond12). Full licence: third_party/ebgaramond/OFL.txt
+
+=== NVIDIA DLSS (NVIDIA RTX SDKs licence) ===
+DS3 VR uses NVIDIA DLSS (DLAA and DLSS upscaling) through the NVIDIA DLSS SDK
+(https://github.com/NVIDIA/DLSS, version 310.9.16):
+- ds3vr/ds3vr_ngx.dll contains NVIDIA's NGX library (nvsdk_ngx_s.lib) in object code form.
+- ds3vr/nvngx_dlss.dll is NVIDIA's DLSS runtime, unchanged.
+Both are Copyright (c) NVIDIA Corporation and are distributed under NVIDIA's licence, included as
+ds3vr/NVIDIA_DLSS_LICENSE.txt. They are not covered by DS3 VR's MIT licence. NVIDIA, RTX and DLSS are
+trademarks of NVIDIA Corporation.
+
+=== AMD FidelityFX Contrast Adaptive Sharpening (MIT License) ===
+The sharpening option (src/sharpen.cpp) implements AMD's FidelityFX CAS algorithm.
+Copyright (c) 2019-2024 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or
+substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES
+OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

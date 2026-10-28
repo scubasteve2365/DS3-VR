@@ -3,7 +3,8 @@ DS3 VR: DARK SOULS III in VR
 
 True stereo VR for Dark Souls III. Both eyes are rendered from the same game frame, so there is no
 alternate-eye shimmer. The camera follows your head, the HUD sits on a floating panel you can size
-and place, and the game runs at your headset's refresh rate. You play with a gamepad; there are no
+and place, and the game runs at your headset's refresh rate. On NVIDIA RTX graphics cards, DLAA
+smooths jagged edges and DLSS upscaling raises the frame rate. You play with a gamepad; there are no
 motion controls.
 
 Project page, updates and bug reports: https://github.com/scubasteve2365/DS3-VR
@@ -16,13 +17,16 @@ WHAT YOU NEED
   Meta Quest Link or PimaxXR. Thoroughly tested on SteamVR; the others should work but have not been
   fully tested yet.
 - A gamepad (Xbox, or others through Steam Input)
+- For DLAA and DLSS (optional): an NVIDIA RTX graphics card and a recent driver. Everything else works
+  on any graphics card.
 - Helifax's Dark Souls 3 geo-11 fix: the install step downloads it for you (see step 2)
 
 
 STEP 1: EXTRACT DS3 VR
 ----------------------
 Extract the whole DS3 VR zip into the game's Game folder, the folder with DarkSoulsIII.exe.
-You get dinput8.dll, install-ds3vr.bat, uninstall-ds3vr.bat and a ds3vr folder next to it.
+You get dinput8.dll, install-ds3vr.bat, uninstall-ds3vr.bat and a ds3vr folder next to it (the ds3vr
+folder also holds the two NVIDIA DLSS files).
 
 Game folder example: C:\Program Files (x86)\Steam\steamapps\common\DARK SOULS III\Game
 
@@ -69,13 +73,33 @@ CONTROLS
 --------
   VR menu ............. click both thumbsticks together (keyboard: Insert)
   In the menu ......... D-pad or left stick to move, A to select, B to close
+  Menu tabs ........... LB / RB or LT / RT (keyboard: Page Up / Page Down)
   Recenter ............ your runtime's recenter, the menu, or F8
   HUD size / mode ..... the menu, or F6 / F7
 
-The VR menu has world scale (1.0 life size to 5.0), horizon lock (when on, the right stick no longer
-tilts the view up or down; off by default), HUD mode, size, distance and height, the
-resolution readout, advanced settings (pose lag and head movement), developer keys, recenter and
-reset to defaults. Every change is saved straight away.
+The VR menu has three tabs. Every change is saved straight away.
+- General: world scale (0.25 to 10; 1.0 is life size, higher makes the world smaller with more 3D
+  depth), decoupled pitch, head movement, the HUD (mode, size, distance, height) and recenter.
+- Graphics: NVIDIA DLSS, DLSS model, sharpening and the resolution readout.
+- Developer: test settings for troubleshooting. Normal play does not need them.
+
+Decoupled pitch keeps the horizon level, so the right stick never tilts the view up or down; only
+your head does. "Level" still lets the stick raise and lower the camera around your character;
+"Level + stick lock" ignores the stick's up and down entirely. Off is the flat game's camera.
+
+
+NVIDIA DLSS (RTX GRAPHICS CARDS)
+-------------------------------
+Graphics tab, NVIDIA DLSS:
+- Off: the game's own image.
+- DLAA: anti-aliasing at full resolution. Edges and fine detail stop shimmering; costs a little
+  frame rate. Takes effect straight away.
+- Quality, Balanced, Performance, Ultra Perf: upscaling. The game renders each eye smaller and DLSS
+  rebuilds it at your headset's resolution, for more frame rate. Takes effect the next time you
+  start the game.
+DLSS model: CNN is the default and the fastest; Transformer can look a little better and costs more.
+Sharpening (Off to Max) works with any setting, DLSS or not, if the image looks too soft for you.
+The game's own anti-aliasing should stay off (the install step sets it off).
 
 
 RESOLUTION
@@ -84,17 +108,14 @@ The VR menu shows the resolution per eye: what the game renders now, what your V
 and what the next launch will use. To change it, change the resolution in your runtime (SteamVR,
 Virtual Desktop, the Meta app or Pimax Play) and restart the game.
 
-The first launch after installing renders wider than it needs to. The height always matches your
-VR runtime, but the width depends on your headset's field of view, which the game can only be told
-before it starts, and the headset reports it only once the game is running. So the first launch uses
-a wide default that fits any headset, and DS3 VR remembers your headset's real shape for every launch
-after that. Example: 5300 x 3700 per eye on the first launch, 4800 x 3700 from the second. Nothing
-needs doing; just expect the first launch to run a little heavier.
+With a DLSS upscaling mode on, the menu shows both sizes: what the game renders, and what your
+headset gets after DLSS.
 
 
 UPDATING
 --------
-Extract the new DS3 VR zip over the old one and run install-ds3vr.bat again. Your settings are kept.
+Extract the new DS3 VR zip over the old one and overwrite the old files. Your settings are kept.
+From 1.0.x to 2.0 you do not need to run install-ds3vr.bat again.
 
 
 UNINSTALL
@@ -115,5 +136,7 @@ CREDITS
 - geo-11 3D driver: davegl1234 and the HelixMod team (personal-use licence, LICENSE.txt in the fix)
 - Dark Souls 3 geo-11 fix: Helifax, updated by masterotaku. Please support them.
 - 3Dmigoto: bo3b, Flugan and DarkStarSword
+- NVIDIA DLSS: NVIDIA Corporation (NVIDIA_DLSS_LICENSE.txt in the ds3vr folder)
+- Sharpening: AMD FidelityFX Contrast Adaptive Sharpening
 - Ideas from Luke Ross's R.E.A.L. VR and praydog's UEVR
 - DS3 VR is MIT licensed (LICENSE.txt). Third-party code: THIRD-PARTY-NOTICES.txt

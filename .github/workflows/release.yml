@@ -62,9 +62,16 @@ jobs:
           [ "$ok" = 1 ]
           x86_64-w64-mingw32-g++ --version | head -1
 
+      - name: Fetch the DLSS files (our helper from ngx-build, NVIDIA's runtime from the DLSS SDK)
+        if: steps.check.outputs.go == 'true'
+        run: sh tools/fetch-dlss.sh
+
       - name: Build
         if: steps.check.outputs.go == 'true'
-        run: sh build.sh
+        run: |
+          sh build.sh
+          V=${{ steps.check.outputs.version }}
+          test -f "build/DS3VR-$V/ds3vr/nvngx_dlss.dll"  # a release without DLSS would be a mistake
 
       - name: Package and publish
         if: steps.check.outputs.go == 'true'
