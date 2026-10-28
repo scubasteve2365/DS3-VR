@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 
@@ -21,8 +22,10 @@ namespace {
 
 // ID3D11DeviceContext vtable slots
 constexpr int kDrawIndexed = 12, kDraw = 13, kDrawIndexedInstanced = 20, kDrawInstanced = 21, kOMSetRenderTargets = 33,
-              kOMSetRTAndUAV = 34, kCopySubresourceRegion = 46, kCopyResource = 47, kClearRTV = 50, kClearDSV = 53,
+              kOMSetRTAndUAV = 34, kDispatch = 41, kCopySubresourceRegion = 46, kCopyResource = 47, kClearRTV = 50, kClearDSV = 53,
               kResolve = 57;
+using DispatchFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT);
+DispatchFn o_Dispatch = nullptr;
 
 using DrawIndexedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, INT);
 using DrawFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT);
@@ -50,6 +53,25 @@ ClearRTVFn o_ClearRTV = nullptr;
 ClearDSVFn o_ClearDSV = nullptr;
 ResolveFn o_Resolve = nullptr;
 
+// The same calls on DS3's deferred contexts, when their vtable has its own functions (see Install).
+DrawIndexedFn d_DrawIndexed = nullptr;
+DrawFn d_Draw = nullptr;
+DrawIndexedInstancedFn d_DrawIndexedInstanced = nullptr;
+DrawInstancedFn d_DrawInstanced = nullptr;
+OMSetRTFn d_OMSetRT = nullptr;
+OMSetRTUAVFn d_OMSetRTUAV = nullptr;
+DispatchFn d_Dispatch = nullptr;
+CopySubFn d_CopySub = nullptr;
+CopyResFn d_CopyRes = nullptr;
+ClearRTVFn d_ClearRTV = nullptr;
+ClearDSVFn d_ClearDSV = nullptr;
+ResolveFn d_Resolve = nullptr;
+constexpr int kExecuteCommandList = 58, kFinishCommandList = 114;
+using ExecuteCLFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11CommandList*, BOOL);
+using FinishCLFn = HRESULT(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, BOOL, ID3D11CommandList**);
+ExecuteCLFn o_ExecuteCL = nullptr;
+FinishCLFn d_FinishCL = nullptr;
+
 ID3D11DeviceContext* g_ctx = nullptr;  // the real immediate context
 bool g_installed = false;
 std::atomic<int> g_state{0};           // 0 idle, 1 start at the next Present, 2 recording
@@ -60,8 +82,38 @@ std::string g_buf;
 std::unordered_map<void*, int> g_resIds;
 std::unordered_map<void*, int> g_shaderIds;
 int g_nextRes = 0, g_nextShader = 0;
+std::unordered_map<void*, int> g_ctxIds;   // deferred contexts, numbered as first seen ([d1], [d2], ...)
+std::unordered_map<void*, int> g_listIds;  // command lists (L1, L2, ...)
+std::recursive_mutex g_recMutex;           // deferred contexts record from the game's worker threads
 
-bool Recording(ID3D11DeviceContext* c) { return g_state.load(std::memory_order_relaxed) == 2 && c == g_ctx; }
+// Any context while a frame is being recorded (the immediate one and DS3's deferred ones).
+bool Recording(ID3D11DeviceContext* c) { return c && g_state.load(std::memory_order_relaxed) == 2; }
+
+std::string CtxTag(ID3D11DeviceContext* c) {
+    if (c == g_ctx) return std::string();
+    auto it = g_ctxIds.find(c);
+    int id = 0;
+    if (it != g_ctxIds.end()) {
+        id = it->second;
+    } else {
+        id = static_cast<int>(g_ctxIds.size()) + 1;
+        g_ctxIds[c] = id;
+    }
+    return "[d" + std::to_string(id) + "] ";
+}
+
+int ListId(void* l) {
+    auto it = g_listIds.find(l);
+    if (it != g_listIds.end()) return it->second;
+    const int id = static_cast<int>(g_listIds.size()) + 1;
+    g_listIds[l] = id;
+    return id;
+}
+
+// Start of one recorded line: hold the lock for the rest of the scope, and tag deferred contexts.
+#define REC_BEGIN(c)                                              \
+    std::lock_guard<std::recursive_mutex> recLock(g_recMutex);    \
+    g_buf += CtxTag(c)
 
 void Add(const char* fmt, ...) {
     char b[1024];
@@ -119,7 +171,30 @@ std::string Dsv(ID3D11DepthStencilView* v) {
     v->GetResource(&r);
     std::string s = Res(r);
     if (r) r->Release();
-    return s;
+    D3D11_DEPTH_STENCIL_VIEW_DESC d{};
+    v->GetDesc(&d);
+    char b[64];
+    if (d.ViewDimension == D3D11_DSV_DIMENSION_TEXTURE2DARRAY)
+        snprintf(b, sizeof(b), "{f%d sl%u+%u}", static_cast<int>(d.Format), d.Texture2DArray.FirstArraySlice, d.Texture2DArray.ArraySize);
+    else
+        snprintf(b, sizeof(b), "{f%d dim%d}", static_cast<int>(d.Format), static_cast<int>(d.ViewDimension));
+    return s + b;
+}
+
+std::string Uav(ID3D11UnorderedAccessView* v) {
+    if (!v) return "-";
+    ID3D11Resource* r = nullptr;
+    v->GetResource(&r);
+    std::string s = Res(r);
+    if (r) r->Release();
+    D3D11_UNORDERED_ACCESS_VIEW_DESC d{};
+    v->GetDesc(&d);
+    char b[64];
+    if (d.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE2DARRAY)
+        snprintf(b, sizeof(b), "{f%d sl%u+%u}", static_cast<int>(d.Format), d.Texture2DArray.FirstArraySlice, d.Texture2DArray.ArraySize);
+    else
+        snprintf(b, sizeof(b), "{f%d dim%d}", static_cast<int>(d.Format), static_cast<int>(d.ViewDimension));
+    return s + b;
 }
 
 std::string Srv(ID3D11ShaderResourceView* v) {
@@ -128,7 +203,28 @@ std::string Srv(ID3D11ShaderResourceView* v) {
     v->GetResource(&r);
     std::string s = Res(r);
     if (r) r->Release();
+    D3D11_SHADER_RESOURCE_VIEW_DESC d{};
+    v->GetDesc(&d);
+    if (d.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2DARRAY) {
+        char b[48];
+        snprintf(b, sizeof(b), "{sl%u+%u}", d.Texture2DArray.FirstArraySlice, d.Texture2DArray.ArraySize);
+        s += b;
+    }
     return s;
+}
+
+// The bound shader resources of one stage, as " i:R<n>" for each slot in use (slots 0 to 15).
+template <class Getter>
+std::string BoundSrvs(Getter get) {
+    ID3D11ShaderResourceView* srv[16] = {};
+    get(srv);
+    std::string s;
+    for (int i = 0; i < 16; ++i)
+        if (srv[i]) {
+            s += " " + std::to_string(i) + ":" + Srv(srv[i]);
+            srv[i]->Release();
+        }
+    return s.empty() ? " -" : s;
 }
 
 int ShaderId(void* s) {
@@ -152,13 +248,7 @@ void DrawState(ID3D11DeviceContext* c) {
     s += " ds:" + Dsv(dsv);
     if (dsv) dsv->Release();
 
-    ID3D11ShaderResourceView* srv[4] = {};
-    c->PSGetShaderResources(0, 4, srv);
-    s += " t:";
-    for (int i = 0; i < 4; ++i) {
-        s += (i ? "," : "") + Srv(srv[i]);
-        if (srv[i]) srv[i]->Release();
-    }
+    s += " t:" + BoundSrvs([c](ID3D11ShaderResourceView** v) { c->PSGetShaderResources(0, 16, v); });
 
     ID3D11VertexShader* vs = nullptr;
     ID3D11PixelShader* ps = nullptr;
@@ -371,100 +461,172 @@ void StereoProbe(ID3D11DeviceContext* c) {
     g_probeAt = now + 50;  // read it back a few frames later
 }
 
-void STDMETHODCALLTYPE DrawIndexedDetour(ID3D11DeviceContext* c, UINT n, UINT start, INT base) {
+// Detours, one template per call: D = false for the immediate context's vtable, true for DS3's deferred
+// contexts (it builds parts of the frame on worker threads). A function both vtables share has only the
+// immediate hook, which then sees both kinds. Recording takes the lock (deferred contexts run on other
+// threads) and tags deferred lines [dN]; the HUD and stereo probe only ever act on the immediate context.
+template <bool D>
+void STDMETHODCALLTYPE DispatchT(ID3D11DeviceContext* c, UINT x, UINT y, UINT z) {
     if (Recording(c)) {
+        REC_BEGIN(c);
+        ID3D11ComputeShader* cs = nullptr;
+        c->CSGetShader(&cs, nullptr, nullptr);
+        std::string u;
+        ID3D11UnorderedAccessView* uav[8] = {};
+        c->CSGetUnorderedAccessViews(0, 8, uav);
+        for (int i = 0; i < 8; ++i)
+            if (uav[i]) {
+                u += " " + std::to_string(i) + ":" + Uav(uav[i]);
+                uav[i]->Release();
+            }
+        const std::string t = BoundSrvs([c](ID3D11ShaderResourceView** v) { c->CSGetShaderResources(0, 16, v); });
+        Add("%u Dispatch %ux%ux%u cs%d t:%s u:%s\n", ++g_seq, x, y, z, ShaderId(cs), t.c_str(), u.empty() ? " -" : u.c_str());
+        if (cs) cs->Release();
+    }
+    (D ? d_Dispatch : o_Dispatch)(c, x, y, z);
+}
+
+template <bool D>
+void STDMETHODCALLTYPE DrawIndexedT(ID3D11DeviceContext* c, UINT n, UINT start, INT base) {
+    if (Recording(c)) {
+        REC_BEGIN(c);
         Add("%u DrawIndexed %u start %u base %d", ++g_seq, n, start, base);
         DrawState(c);
     }
-    if (c == g_ctx) StereoProbe(c);
-    if (c == g_ctx && !HudBeforeDraw(c, n, true))
-        return;
-    o_DrawIndexed(c, n, start, base);
+    if (!D && c == g_ctx) {
+        StereoProbe(c);
+        if (!HudBeforeDraw(c, n, true)) return;
+    }
+    (D ? d_DrawIndexed : o_DrawIndexed)(c, n, start, base);
 }
-void STDMETHODCALLTYPE DrawDetour(ID3D11DeviceContext* c, UINT n, UINT start) {
+template <bool D>
+void STDMETHODCALLTYPE DrawT(ID3D11DeviceContext* c, UINT n, UINT start) {
     if (Recording(c)) {
+        REC_BEGIN(c);
         Add("%u Draw %u start %u", ++g_seq, n, start);
         DrawState(c);
     }
-    if (c == g_ctx) StereoProbe(c);
-    if (c == g_ctx && !HudBeforeDraw(c, n, false))
-        return;
-    o_Draw(c, n, start);
+    if (!D && c == g_ctx) {
+        StereoProbe(c);
+        if (!HudBeforeDraw(c, n, false)) return;
+    }
+    (D ? d_Draw : o_Draw)(c, n, start);
 }
-void STDMETHODCALLTYPE DrawIndexedInstancedDetour(ID3D11DeviceContext* c, UINT n, UINT inst, UINT start, INT base, UINT si) {
+template <bool D>
+void STDMETHODCALLTYPE DrawIndexedInstancedT(ID3D11DeviceContext* c, UINT n, UINT inst, UINT start, INT base, UINT si) {
     if (Recording(c)) {
+        REC_BEGIN(c);
         Add("%u DrawIndexedInstanced %u x%u start %u base %d si %u", ++g_seq, n, inst, start, base, si);
         DrawState(c);
     }
-    if (c == g_ctx) StereoProbe(c);
-    if (c == g_ctx && !HudBeforeDraw(c, n, true))
-        return;
-    o_DrawIndexedInstanced(c, n, inst, start, base, si);
+    if (!D && c == g_ctx) {
+        StereoProbe(c);
+        if (!HudBeforeDraw(c, n, true)) return;
+    }
+    (D ? d_DrawIndexedInstanced : o_DrawIndexedInstanced)(c, n, inst, start, base, si);
 }
-void STDMETHODCALLTYPE DrawInstancedDetour(ID3D11DeviceContext* c, UINT n, UINT inst, UINT start, UINT si) {
+template <bool D>
+void STDMETHODCALLTYPE DrawInstancedT(ID3D11DeviceContext* c, UINT n, UINT inst, UINT start, UINT si) {
     if (Recording(c)) {
+        REC_BEGIN(c);
         Add("%u DrawInstanced %u x%u start %u si %u", ++g_seq, n, inst, start, si);
         DrawState(c);
     }
-    if (c == g_ctx) StereoProbe(c);
-    if (c == g_ctx && !HudBeforeDraw(c, n, false))
-        return;
-    o_DrawInstanced(c, n, inst, start, si);
+    if (!D && c == g_ctx) {
+        StereoProbe(c);
+        if (!HudBeforeDraw(c, n, false)) return;
+    }
+    (D ? d_DrawInstanced : o_DrawInstanced)(c, n, inst, start, si);
 }
-void STDMETHODCALLTYPE OMSetRTDetour(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* rtv, ID3D11DepthStencilView* dsv) {
+template <bool D>
+void STDMETHODCALLTYPE OMSetRTT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* rtv, ID3D11DepthStencilView* dsv) {
     if (Recording(c)) {
+        REC_BEGIN(c);
         std::string s;
         for (UINT i = 0; i < n && rtv; ++i) s += " " + Rtv(rtv[i]);
         Add("%u SetRT n%u%s ds:%s\n", ++g_seq, n, s.c_str(), Dsv(dsv).c_str());
     }
-    o_OMSetRT(c, n, rtv, dsv);
-    if (c == g_ctx) HudOnSetRenderTargets(c, n, rtv, dsv);
+    (D ? d_OMSetRT : o_OMSetRT)(c, n, rtv, dsv);
+    if (!D && c == g_ctx) HudOnSetRenderTargets(c, n, rtv, dsv);
 }
-void STDMETHODCALLTYPE OMSetRTUAVDetour(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* rtv, ID3D11DepthStencilView* dsv,
-                                        UINT us, UINT un, ID3D11UnorderedAccessView* const* uav, const UINT* cnt) {
+template <bool D>
+void STDMETHODCALLTYPE OMSetRTUAVT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* rtv, ID3D11DepthStencilView* dsv,
+                                   UINT us, UINT un, ID3D11UnorderedAccessView* const* uav, const UINT* cnt) {
     if (Recording(c)) {
+        REC_BEGIN(c);
         std::string s;
         if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
             for (UINT i = 0; i < n && rtv; ++i) s += " " + Rtv(rtv[i]);
-        Add("%u SetRTUAV n%u%s ds:%s uav %u+%u\n", ++g_seq, n, s.c_str(),
-            n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL ? Dsv(dsv).c_str() : "keep", us, un);
+        std::string u;
+        for (UINT i = 0; i < un && uav && un != D3D11_KEEP_UNORDERED_ACCESS_VIEWS; ++i) u += " " + Uav(uav[i]);
+        Add("%u SetRTUAV n%u%s ds:%s uav %u+%u%s\n", ++g_seq, n, s.c_str(),
+            n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL ? Dsv(dsv).c_str() : "keep", us, un, u.c_str());
     }
-    o_OMSetRTUAV(c, n, rtv, dsv, us, un, uav, cnt);
-    if (c == g_ctx && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) HudOnSetRenderTargets(c, n, rtv, dsv);
+    (D ? d_OMSetRTUAV : o_OMSetRTUAV)(c, n, rtv, dsv, us, un, uav, cnt);
+    if (!D && c == g_ctx && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) HudOnSetRenderTargets(c, n, rtv, dsv);
 }
-void STDMETHODCALLTYPE CopySubDetour(ID3D11DeviceContext* c, ID3D11Resource* dst, UINT ds, UINT x, UINT y, UINT z, ID3D11Resource* src,
-                                     UINT ss, const D3D11_BOX* box) {
+template <bool D>
+void STDMETHODCALLTYPE CopySubT(ID3D11DeviceContext* c, ID3D11Resource* dst, UINT ds, UINT x, UINT y, UINT z, ID3D11Resource* src,
+                                UINT ss, const D3D11_BOX* box) {
     if (Recording(c)) {
+        REC_BEGIN(c);
         const std::string d = Res(dst), s = Res(src);
         Add("%u CopySub %s[%u] @%u,%u <- %s[%u]", ++g_seq, d.c_str(), ds, x, y, s.c_str(), ss);
         if (box) Add(" box %u,%u-%u,%u", box->left, box->top, box->right, box->bottom);
         Add("\n");
     }
-    o_CopySub(c, dst, ds, x, y, z, src, ss, box);
+    (D ? d_CopySub : o_CopySub)(c, dst, ds, x, y, z, src, ss, box);
 }
-void STDMETHODCALLTYPE CopyResDetour(ID3D11DeviceContext* c, ID3D11Resource* dst, ID3D11Resource* src) {
+template <bool D>
+void STDMETHODCALLTYPE CopyResT(ID3D11DeviceContext* c, ID3D11Resource* dst, ID3D11Resource* src) {
     if (Recording(c)) {
+        REC_BEGIN(c);
         const std::string d = Res(dst), s = Res(src);
         Add("%u CopyResource %s <- %s\n", ++g_seq, d.c_str(), s.c_str());
     }
-    o_CopyRes(c, dst, src);
+    (D ? d_CopyRes : o_CopyRes)(c, dst, src);
 }
-void STDMETHODCALLTYPE ClearRTVDetour(ID3D11DeviceContext* c, ID3D11RenderTargetView* v, const FLOAT* col) {
-    if (Recording(c))
+template <bool D>
+void STDMETHODCALLTYPE ClearRTVT(ID3D11DeviceContext* c, ID3D11RenderTargetView* v, const FLOAT* col) {
+    if (Recording(c)) {
+        REC_BEGIN(c);
         Add("%u ClearRT %s (%.2f %.2f %.2f %.2f)\n", ++g_seq, Rtv(v).c_str(), col ? col[0] : 0.f, col ? col[1] : 0.f, col ? col[2] : 0.f,
             col ? col[3] : 0.f);
-    o_ClearRTV(c, v, col);
+    }
+    (D ? d_ClearRTV : o_ClearRTV)(c, v, col);
 }
-void STDMETHODCALLTYPE ClearDSVDetour(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, UINT flags, FLOAT depth, UINT8 st) {
-    if (Recording(c)) Add("%u ClearDS %s flags %u depth %.2f st %u\n", ++g_seq, Dsv(v).c_str(), flags, depth, st);
-    o_ClearDSV(c, v, flags, depth, st);
-}
-void STDMETHODCALLTYPE ResolveDetour(ID3D11DeviceContext* c, ID3D11Resource* dst, UINT ds, ID3D11Resource* src, UINT ss, DXGI_FORMAT f) {
+template <bool D>
+void STDMETHODCALLTYPE ClearDSVT(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, UINT flags, FLOAT depth, UINT8 st) {
     if (Recording(c)) {
+        REC_BEGIN(c);
+        Add("%u ClearDS %s flags %u depth %.2f st %u\n", ++g_seq, Dsv(v).c_str(), flags, depth, st);
+    }
+    (D ? d_ClearDSV : o_ClearDSV)(c, v, flags, depth, st);
+}
+template <bool D>
+void STDMETHODCALLTYPE ResolveT(ID3D11DeviceContext* c, ID3D11Resource* dst, UINT ds, ID3D11Resource* src, UINT ss, DXGI_FORMAT f) {
+    if (Recording(c)) {
+        REC_BEGIN(c);
         const std::string d = Res(dst), s = Res(src);
         Add("%u Resolve %s[%u] <- %s[%u] f%d\n", ++g_seq, d.c_str(), ds, s.c_str(), ss, static_cast<int>(f));
     }
-    o_Resolve(c, dst, ds, src, ss, f);
+    (D ? d_Resolve : o_Resolve)(c, dst, ds, src, ss, f);
+}
+// Where command lists come from (a deferred context finishing one) and where they run (the immediate context).
+void STDMETHODCALLTYPE ExecuteCLDetour(ID3D11DeviceContext* c, ID3D11CommandList* list, BOOL restore) {
+    if (Recording(c)) {
+        REC_BEGIN(c);
+        Add("%u ExecuteCommandList L%d\n", ++g_seq, ListId(list));
+    }
+    o_ExecuteCL(c, list, restore);
+}
+HRESULT STDMETHODCALLTYPE FinishCLDetour(ID3D11DeviceContext* c, BOOL restore, ID3D11CommandList** out) {
+    const HRESULT hr = d_FinishCL(c, restore, out);
+    if (Recording(c) && SUCCEEDED(hr) && out && *out) {
+        REC_BEGIN(c);
+        Add("%u FinishCommandList -> L%d\n", ++g_seq, ListId(*out));
+    }
+    return hr;
 }
 
 bool Hook(void** vt, int slot, void* detour, void** orig, const char* name) {
@@ -486,29 +648,78 @@ void Install(ID3D11Device* dev) {
     ctx->Release();  // the device keeps it alive
     void** vt = *reinterpret_cast<void***>(ctx);
     int ok = 0;
-    ok += Hook(vt, kDrawIndexed, reinterpret_cast<void*>(&DrawIndexedDetour), reinterpret_cast<void**>(&o_DrawIndexed), "DrawIndexed");
-    ok += Hook(vt, kDraw, reinterpret_cast<void*>(&DrawDetour), reinterpret_cast<void**>(&o_Draw), "Draw");
-    ok += Hook(vt, kDrawIndexedInstanced, reinterpret_cast<void*>(&DrawIndexedInstancedDetour),
+    ok += Hook(vt, kDrawIndexed, reinterpret_cast<void*>(&DrawIndexedT<false>), reinterpret_cast<void**>(&o_DrawIndexed), "DrawIndexed");
+    ok += Hook(vt, kDraw, reinterpret_cast<void*>(&DrawT<false>), reinterpret_cast<void**>(&o_Draw), "Draw");
+    ok += Hook(vt, kDrawIndexedInstanced, reinterpret_cast<void*>(&DrawIndexedInstancedT<false>),
                reinterpret_cast<void**>(&o_DrawIndexedInstanced), "DrawIndexedInstanced");
-    ok += Hook(vt, kDrawInstanced, reinterpret_cast<void*>(&DrawInstancedDetour), reinterpret_cast<void**>(&o_DrawInstanced),
+    ok += Hook(vt, kDrawInstanced, reinterpret_cast<void*>(&DrawInstancedT<false>), reinterpret_cast<void**>(&o_DrawInstanced),
                "DrawInstanced");
-    ok += Hook(vt, kOMSetRenderTargets, reinterpret_cast<void*>(&OMSetRTDetour), reinterpret_cast<void**>(&o_OMSetRT),
+    ok += Hook(vt, kOMSetRenderTargets, reinterpret_cast<void*>(&OMSetRTT<false>), reinterpret_cast<void**>(&o_OMSetRT),
                "OMSetRenderTargets");
-    ok += Hook(vt, kOMSetRTAndUAV, reinterpret_cast<void*>(&OMSetRTUAVDetour), reinterpret_cast<void**>(&o_OMSetRTUAV),
+    ok += Hook(vt, kOMSetRTAndUAV, reinterpret_cast<void*>(&OMSetRTUAVT<false>), reinterpret_cast<void**>(&o_OMSetRTUAV),
                "OMSetRenderTargetsAndUnorderedAccessViews");
-    ok += Hook(vt, kCopySubresourceRegion, reinterpret_cast<void*>(&CopySubDetour), reinterpret_cast<void**>(&o_CopySub),
+    ok += Hook(vt, kCopySubresourceRegion, reinterpret_cast<void*>(&CopySubT<false>), reinterpret_cast<void**>(&o_CopySub),
                "CopySubresourceRegion");
-    ok += Hook(vt, kCopyResource, reinterpret_cast<void*>(&CopyResDetour), reinterpret_cast<void**>(&o_CopyRes), "CopyResource");
-    ok += Hook(vt, kClearRTV, reinterpret_cast<void*>(&ClearRTVDetour), reinterpret_cast<void**>(&o_ClearRTV), "ClearRenderTargetView");
-    ok += Hook(vt, kClearDSV, reinterpret_cast<void*>(&ClearDSVDetour), reinterpret_cast<void**>(&o_ClearDSV), "ClearDepthStencilView");
-    ok += Hook(vt, kResolve, reinterpret_cast<void*>(&ResolveDetour), reinterpret_cast<void**>(&o_Resolve), "ResolveSubresource");
+    ok += Hook(vt, kCopyResource, reinterpret_cast<void*>(&CopyResT<false>), reinterpret_cast<void**>(&o_CopyRes), "CopyResource");
+    ok += Hook(vt, kClearRTV, reinterpret_cast<void*>(&ClearRTVT<false>), reinterpret_cast<void**>(&o_ClearRTV), "ClearRenderTargetView");
+    ok += Hook(vt, kClearDSV, reinterpret_cast<void*>(&ClearDSVT<false>), reinterpret_cast<void**>(&o_ClearDSV), "ClearDepthStencilView");
+    ok += Hook(vt, kResolve, reinterpret_cast<void*>(&ResolveT<false>), reinterpret_cast<void**>(&o_Resolve), "ResolveSubresource");
+    ok += Hook(vt, kDispatch, reinterpret_cast<void*>(&DispatchT<false>), reinterpret_cast<void**>(&o_Dispatch), "Dispatch");
+    ok += Hook(vt, kExecuteCommandList, reinterpret_cast<void*>(&ExecuteCLDetour), reinterpret_cast<void**>(&o_ExecuteCL),
+               "ExecuteCommandList");
     wchar_t mod[MAX_PATH] = L"?";
     HMODULE m = nullptr;
     if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                            reinterpret_cast<LPCWSTR>(vt[kDraw]), &m) && m)
         GetModuleFileNameW(m, mod, MAX_PATH);
-    Log("context hooks: %d of 11 on %p (Draw lives in %ls). F2 records one frame to ds3vr_draws_N.txt", ok,
+    Log("context hooks: %d of 13 on %p (Draw lives in %ls). F2 records one frame to ds3vr_draws_N.txt", ok,
         static_cast<void*>(ctx), mod);
+
+    Log("context hooks: deferred contexts are hooked when needed (F2 recording)");
+}
+
+// DS3's deferred contexts (worker threads): hooked only when a feature needs them, so a normal run
+// does not pass every worker-thread draw through this file.
+bool g_deferredHooked = false;
+void InstallDeferred(ID3D11Device* dev) {
+    if (g_deferredHooked || !dev || !g_ctx) return;
+    g_deferredHooked = true;
+    void** vt = *reinterpret_cast<void***>(g_ctx);
+    // DS3's deferred contexts (it records parts of the frame on worker threads): every deferred context of
+    // a device shares one vtable, so a throwaway one shows where those functions are. A function the
+    // immediate context also uses is already hooked above, and that hook records any context.
+    ID3D11DeviceContext* dc = nullptr;
+    if (FAILED(dev->CreateDeferredContext(0, &dc)) || !dc) {
+        Log("drawlog: could not create a deferred context; deferred draws are not recorded");
+        return;
+    }
+    void** vd = *reinterpret_cast<void***>(dc);
+    int own = 0, shared = 0;
+    auto hookD = [&](int slot, void* detour, void** orig, const char* name) {
+        if (vd[slot] == vt[slot]) {
+            ++shared;
+            return;
+        }
+        own += Hook(vd, slot, detour, orig, name);
+    };
+    hookD(kDrawIndexed, reinterpret_cast<void*>(&DrawIndexedT<true>), reinterpret_cast<void**>(&d_DrawIndexed), "deferred DrawIndexed");
+    hookD(kDraw, reinterpret_cast<void*>(&DrawT<true>), reinterpret_cast<void**>(&d_Draw), "deferred Draw");
+    hookD(kDrawIndexedInstanced, reinterpret_cast<void*>(&DrawIndexedInstancedT<true>), reinterpret_cast<void**>(&d_DrawIndexedInstanced),
+          "deferred DrawIndexedInstanced");
+    hookD(kDrawInstanced, reinterpret_cast<void*>(&DrawInstancedT<true>), reinterpret_cast<void**>(&d_DrawInstanced), "deferred DrawInstanced");
+    hookD(kOMSetRenderTargets, reinterpret_cast<void*>(&OMSetRTT<true>), reinterpret_cast<void**>(&d_OMSetRT), "deferred OMSetRenderTargets");
+    hookD(kOMSetRTAndUAV, reinterpret_cast<void*>(&OMSetRTUAVT<true>), reinterpret_cast<void**>(&d_OMSetRTUAV),
+          "deferred OMSetRenderTargetsAndUnorderedAccessViews");
+    hookD(kDispatch, reinterpret_cast<void*>(&DispatchT<true>), reinterpret_cast<void**>(&d_Dispatch), "deferred Dispatch");
+    hookD(kCopySubresourceRegion, reinterpret_cast<void*>(&CopySubT<true>), reinterpret_cast<void**>(&d_CopySub), "deferred CopySubresourceRegion");
+    hookD(kCopyResource, reinterpret_cast<void*>(&CopyResT<true>), reinterpret_cast<void**>(&d_CopyRes), "deferred CopyResource");
+    hookD(kClearRTV, reinterpret_cast<void*>(&ClearRTVT<true>), reinterpret_cast<void**>(&d_ClearRTV), "deferred ClearRenderTargetView");
+    hookD(kClearDSV, reinterpret_cast<void*>(&ClearDSVT<true>), reinterpret_cast<void**>(&d_ClearDSV), "deferred ClearDepthStencilView");
+    hookD(kResolve, reinterpret_cast<void*>(&ResolveT<true>), reinterpret_cast<void**>(&d_Resolve), "deferred ResolveSubresource");
+    own += Hook(vd, kFinishCommandList, reinterpret_cast<void*>(&FinishCLDetour), reinterpret_cast<void**>(&d_FinishCL),
+                "deferred FinishCommandList");
+    dc->Release();
+    Log("context hooks: deferred contexts: %d hooked, %d shared with the immediate context", own, shared);
 }
 
 void WriteFile() {
@@ -532,8 +743,13 @@ void CtxSetRenderTargetsRaw(ID3D11DeviceContext* c, unsigned n, ID3D11RenderTarg
     if (o_OMSetRT) o_OMSetRT(c, n, rtv, dsv);
 }
 
+void DrawLogEnsureDeferredHooks(ID3D11Device* dev) { InstallDeferred(dev); }
+
 void DrawLogOnPresent(ID3D11Device* dev) {
     if (!g_installed && dev) Install(dev);
+    if (g_request.load(std::memory_order_relaxed) && !g_deferredHooked) InstallDeferred(dev);  // F2: record worker threads too
+    if (g_state != 2 && !g_request.load(std::memory_order_relaxed)) return;  // the usual case: nothing to do, no lock
+    std::lock_guard<std::recursive_mutex> lock(g_recMutex);  // worker threads may be recording deferred draws
     if (g_state == 2) {
         Add("=== Present ===\n");
         g_state = 0;
@@ -541,9 +757,11 @@ void DrawLogOnPresent(ID3D11Device* dev) {
     }
     if (g_state == 0 && g_request.exchange(false) && g_ctx) {
         g_buf.clear();
-        g_buf.reserve(4 << 20);
+        g_buf.reserve(16 << 20);
         g_resIds.clear();
         g_shaderIds.clear();
+        g_ctxIds.clear();
+        g_listIds.clear();
         g_nextRes = g_nextShader = 0;
         g_seq = 0;
         g_buf += "=== frame start (after Present) ===\n";

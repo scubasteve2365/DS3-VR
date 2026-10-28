@@ -14,6 +14,8 @@ namespace ds3vr {
 
 void DrawLogOnPresent(ID3D11Device* realDevice);  // call once per frame from the Present hook
 void DrawLogRequest();                            // F2: record the next frame
+// Hook DS3's deferred contexts (worker threads) now, if not done yet. Used by F2.
+void DrawLogEnsureDeferredHooks(ID3D11Device* dev);
 
 // The same context hooks also drive the HUD panel (hud.cpp). This binds render targets on the real
 // context without going through our own hook.
