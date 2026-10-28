@@ -60,6 +60,12 @@ The VR menu has three tabs, and every change is saved straight away:
 - **Graphics:** NVIDIA DLSS, the DLSS model, sharpening and the resolution readout.
 - **Developer:** test settings for troubleshooting. Normal play does not need them.
 
+<p align="center">
+  <img src="docs/images/menu-general.png" alt="VR menu, General tab" width="32%">
+  <img src="docs/images/menu-graphics.png" alt="VR menu, Graphics tab" width="32%">
+  <img src="docs/images/menu-developer.png" alt="VR menu, Developer tab with developer mode on" width="32%">
+</p>
+
 **Decoupled pitch** keeps the horizon level: the right stick never tilts the view up or down, only your
 head does. *Level* still lets the stick raise and lower the camera around your character; *Level +
 stick lock* ignores the stick's up and down entirely; *Off* is the flat game's camera.
@@ -186,7 +192,7 @@ NVIDIA's NGX library, which only exists for Visual Studio, so it is built on Git
 | `src` | The mod: OpenXR output, head tracking, HUD panel, menu, resolution and frame rate handling |
 | `installer` | The patcher: unpacks and checks Helifax's fix, patches it for VR, backs up and restores |
 | `dist` | Files shipped as they are: install and uninstall batch files, player README, default settings |
-| `tools` | A patch test that runs the installer's patches on Helifax's files outside Windows; the NGX helper source; the DLSS fetch script |
+| `tools` | A patch test that runs the installer's patches on Helifax's files outside Windows; the NGX helper source; the DLSS fetch script; `menushots`, which renders the menu images in `docs/images` |
 | `third_party` | Dear ImGui, MinHook, the OpenXR headers, EB Garamond (menu font, third_party/ebgaramond), and 7-Zip's C decoder |
 
 No files from geo-11 or Helifax's fix are in this repository: their licences do not allow
