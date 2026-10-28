@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "camhook.h"
+#include "d3d11exports.h"
 #include "dlss.h"
 #include "rendersize.h"
 #include "sharpen.h"
@@ -469,6 +470,7 @@ void CaptureUpscaled(ID3D11DeviceContext* ctx, ID3D11Texture2D* const* up, UINT 
 int InitXR() {
   if (g_inst == XR_NULL_HANDLE) {
     ReadSettings();
+    D3D11AddMissingExports();  // before the runtime loads its DLLs (Virtual Desktop needs D3D11On12CreateDevice)
     if (!LoadRuntime()) return false;
 
     PFN_xrCreateInstance xrCreateInstance_ = nullptr;
@@ -525,7 +527,7 @@ int InitXR() {
             }
             if (now - waitStart < 20000) {
                 // Start over with a fresh connection next time: asking again on the same one crashed inside
-                // Virtual Desktop's runtime.
+                // Virtual Desktop's runtime after it had failed to load its LibOVR.
                 xrDestroyInstance_(g_inst);
                 g_inst = XR_NULL_HANDLE;
                 return 2;
@@ -1178,20 +1180,6 @@ bool TickXR() {
 
 } // namespace
 
-bool XrRuntimeIsVirtualDesktop() {
-    // The same choice as LoadRuntime: XR_RUNTIME_JSON for this launch, else the system's active runtime.
-    wchar_t manifest[1024] = {};
-    const DWORD envLen = GetEnvironmentVariableW(L"XR_RUNTIME_JSON", manifest, 1024);
-    if (!(envLen > 0 && envLen < 1024 && GetFileAttributesW(manifest) != INVALID_FILE_ATTRIBUTES)) {
-        manifest[0] = 0;
-        DWORD sz = sizeof(manifest);
-        if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Khronos\\OpenXR\\1", L"ActiveRuntime", RRF_RT_REG_SZ, nullptr, manifest,
-                         &sz) != ERROR_SUCCESS)
-            return false;
-    }
-    for (wchar_t* c = manifest; *c; ++c) *c = static_cast<wchar_t>(towlower(*c));
-    return wcsstr(manifest, L"virtualdesktop") != nullptr;
-}
 
 // Early, before the game has a window: ask the runtime what per-eye size it wants, without a session.
 bool XrQueryRecommendedHeight(unsigned* height, unsigned* width) {
