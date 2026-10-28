@@ -124,17 +124,62 @@ Run uninstall-ds3vr.bat in the Game folder. It puts Helifax's files and your gra
 and removes DS3 VR. To also remove Helifax's fix, run his uninstall.bat afterwards.
 
 
+TROUBLESHOOTING
+---------------
+The game crashes on start, or renders at the wrong resolution:
+  DS3 VR reads the render resolution from your VR runtime as the game starts, and occasionally it
+  does not arrive in time. This mostly happens on the first launch after installing or updating.
+  Close the game and launch it again; once it has started correctly it stays correct until the next
+  update or reinstall. The VR menu's Graphics tab shows whether the next launch will use a
+  different size.
+
+The game only shows on the monitor:
+  Your VR runtime is not running, or it is not the active OpenXR runtime. In SteamVR: Settings >
+  OpenXR > Set SteamVR as OpenXR runtime. Start the runtime before the game.
+
+DS3 VR says it is off and asks you to run the install:
+  Run install-ds3vr.bat in the Game folder. If you reinstalled Helifax's fix, run it again.
+
+The game crashed after changing graphics settings:
+  Do not change the resolution or screen mode in the game's own menu while playing. Restart the
+  game; the mod sets the size itself.
+
+Low frame rate:
+  Lower the resolution in your VR runtime and restart the game, or pick a DLSS upscaling mode
+  (Quality or Balanced) on an RTX card and restart. DLAA costs a little frame rate rather than
+  saving it. Close other VR apps and overlays you are not using. The first launch after installing
+  can stutter while geo-11 prepares its shaders.
+
+DLSS options are unavailable:
+  DLSS needs an NVIDIA RTX graphics card and a recent driver. The status line under the DLSS setting
+  says why it is off. Check that ds3vr_ngx.dll, nvngx_dlss.dll and NVIDIA_DLSS_LICENSE.txt are in
+  Game\ds3vr. An upscaling mode only applies after a restart.
+
+The image looks soft:
+  Try Sharpening on the Graphics tab (Low or Medium is usually enough).
+
+The view is tilted or off to one side:
+  Recenter from the VR menu, with F8, or with your runtime's recenter. If camera pitch from the
+  right stick is uncomfortable, try Decoupled pitch on the General tab.
+
+Another mod stopped working, or DS3 VR did not load:
+  DS3 VR is dinput8.dll in the Game folder. Other mods that use a dinput8.dll there (such as the
+  original DS3 Mod Engine) replace it, and only one can be installed at a time.
+
+Windows or your antivirus removed or blocked a file:
+  Mods that hook into a game are sometimes flagged. Restore dinput8.dll (or ds3vr\ds3vr-patcher.exe)
+  from the zip, and add an exception if you trust the download. Only download DS3 VR from
+  https://github.com/scubasteve2365/DS3-VR/releases
+
+Anything else:
+  Report it at https://github.com/scubasteve2365/DS3-VR/issues and attach Game\ds3vr.log (and
+  Game\ds3vr_prev.log if you relaunched after the problem).
+
+
 SUPPORT
 -------
 DS3 VR is free. If you enjoy it and want to support more VR mods:
 https://buymeacoffee.com/scubasteve2365
-
-
-PROBLEMS
---------
-- The game only shows on the monitor: your VR runtime is not running or not the active OpenXR runtime.
-- Anything else: report it at https://github.com/scubasteve2365/DS3-VR/issues and attach
-  Game\ds3vr.log (and Game\ds3vr_prev.log if you relaunched after the problem).
 
 
 CREDITS
