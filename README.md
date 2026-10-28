@@ -18,7 +18,7 @@ marker in 3D, NVIDIA DLSS for both eyes, and an in-headset menu.
 |---|---|
 | Game | DARK SOULS III on Steam, version 1.15.2 (the current Steam version) |
 | VR runtime | An OpenXR runtime set as the active one. Tested on SteamVR, and on Virtual Desktop (VDXR) with a Meta Quest 3; Meta Quest Link and PimaxXR should work but have not been fully tested yet. |
-| Headset | Any PC VR headset that runs on that runtime |
+| Headset | Any PC VR headset that runs on that runtime. **Meta Quest:** use Virtual Desktop with its VDXR runtime; SteamVR over Quest Link has known problems (upside-down menu, black screen after Start). |
 | Gamepad | Xbox, or others through Steam Input |
 | For DLSS (optional) | An NVIDIA RTX graphics card and a recent driver. Everything else works on any graphics card. |
 | Helifax's geo-11 fix | [Dark Souls 3 geo-11 fix](https://helixmod.blogspot.com/2016/04/dark-souls-3-3d-vision-fix.html) by Helifax and masterotaku (21 October 2023 version), which includes the geo-11 3D driver. You do not download it yourself: the install step fetches it from its official host. |

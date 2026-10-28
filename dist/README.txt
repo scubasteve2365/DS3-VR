@@ -16,6 +16,8 @@ WHAT YOU NEED
 - A PC VR headset with an OpenXR runtime set as the active one: SteamVR, Virtual Desktop (VDXR),
   Meta Quest Link or PimaxXR. Tested on SteamVR, and on Virtual Desktop with a Meta Quest 3; Meta
   Quest Link and PimaxXR should work but have not been fully tested yet.
+- Meta Quest: use Virtual Desktop with its VDXR runtime. SteamVR over Quest Link has known problems
+  (upside-down menu, black screen after Start).
 - A gamepad (Xbox, or others through Steam Input)
 - For DLAA and DLSS (optional): an NVIDIA RTX graphics card and a recent driver. Everything else works
   on any graphics card.
