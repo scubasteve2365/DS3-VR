@@ -124,6 +124,12 @@ Run uninstall-ds3vr.bat in the Game folder. It puts Helifax's files and your gra
 and removes DS3 VR. To also remove Helifax's fix, run his uninstall.bat afterwards.
 
 
+SUPPORT
+-------
+DS3 VR is free. If you enjoy it and want to support more VR mods:
+https://buymeacoffee.com/scubasteve2365
+
+
 PROBLEMS
 --------
 - The game only shows on the monitor: your VR runtime is not running or not the active OpenXR runtime.

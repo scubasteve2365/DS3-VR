@@ -109,6 +109,11 @@ The game renders a little wider than the runtime asks for, because DS3 can only 
 and has to cover the wider side of each eye. The height always matches. The frame rate is capped at
 your headset's refresh rate.
 
+## Support
+
+DS3 VR is free. If you enjoy it and want to support more VR mods, you can
+[buy me a coffee](https://buymeacoffee.com/scubasteve2365). Thank you!
+
 ## Reporting a problem
 
 Open an [issue](../../issues) and attach `Game\ds3vr.log`. If a launch went wrong and you have since
