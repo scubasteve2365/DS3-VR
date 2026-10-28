@@ -14,8 +14,8 @@ WHAT YOU NEED
 -------------
 - DARK SOULS III on Steam (the current version, 1.15.2)
 - A PC VR headset with an OpenXR runtime set as the active one: SteamVR, Virtual Desktop (VDXR),
-  Meta Quest Link or PimaxXR. Thoroughly tested on SteamVR; the others should work but have not been
-  fully tested yet.
+  Meta Quest Link or PimaxXR. Tested on SteamVR, and on Virtual Desktop with a Meta Quest 3; Meta
+  Quest Link and PimaxXR should work but have not been fully tested yet.
 - A gamepad (Xbox, or others through Steam Input)
 - For DLAA and DLSS (optional): an NVIDIA RTX graphics card and a recent driver. Everything else works
   on any graphics card.

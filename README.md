@@ -17,7 +17,7 @@ marker in 3D, NVIDIA DLSS for both eyes, and an in-headset menu.
 | | |
 |---|---|
 | Game | DARK SOULS III on Steam, version 1.15.2 (the current Steam version) |
-| VR runtime | An OpenXR runtime set as the active one. Thoroughly tested on SteamVR; Virtual Desktop (VDXR), Meta Quest Link and PimaxXR should work but have not been fully tested yet. |
+| VR runtime | An OpenXR runtime set as the active one. Tested on SteamVR, and on Virtual Desktop (VDXR) with a Meta Quest 3; Meta Quest Link and PimaxXR should work but have not been fully tested yet. |
 | Headset | Any PC VR headset that runs on that runtime |
 | Gamepad | Xbox, or others through Steam Input |
 | For DLSS (optional) | An NVIDIA RTX graphics card and a recent driver. Everything else works on any graphics card. |
