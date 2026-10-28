@@ -14,6 +14,7 @@
 #include <unordered_map>
 
 #include "MinHook.h"
+#include "dlss.h"
 #include "hud.h"
 #include "log.h"
 
@@ -317,6 +318,7 @@ bool g_probeEverRead = false, g_probeWarned = false;
 unsigned g_probeTexW = 1;                       // texels copied (first row, up to 8)
 uint64_t g_probeDraws = 0, g_probeHits = 0;     // diagnostics: draws looked at, draws with slot 125 bound
 int g_probeRawLogs = 0;
+std::atomic<float> g_stereoSep{0.f}, g_stereoConv{0.f};  // last values read (for DLAA's motion vectors)
 ULONGLONG g_probeStatAt = 0;
 
 void StereoProbe(ID3D11DeviceContext* c) {
@@ -347,6 +349,8 @@ void StereoProbe(ID3D11DeviceContext* c) {
         }
         c->Unmap(g_probeStaging, 0);
         if (std::fabs(sep) > 0.0005f && std::fabs(sep) < 0.3f) {
+            g_stereoSep.store(std::fabs(sep));
+            g_stereoConv.store(conv);
             XrSetMeasuredShift(std::fabs(sep), conv, eye);
             g_probeEverRead = true;
         } else if (g_probeRawLogs <= 1) {
@@ -493,7 +497,7 @@ void STDMETHODCALLTYPE DrawIndexedT(ID3D11DeviceContext* c, UINT n, UINT start, 
         Add("%u DrawIndexed %u start %u base %d", ++g_seq, n, start, base);
         DrawState(c);
     }
-    if (!D && c == g_ctx) {
+    if (!D && c == g_ctx && !DlaaBusy()) {
         StereoProbe(c);
         if (!HudBeforeDraw(c, n, true)) return;
     }
@@ -506,7 +510,8 @@ void STDMETHODCALLTYPE DrawT(ID3D11DeviceContext* c, UINT n, UINT start) {
         Add("%u Draw %u start %u", ++g_seq, n, start);
         DrawState(c);
     }
-    if (!D && c == g_ctx) {
+    if (!D && c == g_ctx && !DlaaBusy()) {
+        DlaaBeforeDraw(c);
         StereoProbe(c);
         if (!HudBeforeDraw(c, n, false)) return;
     }
@@ -519,7 +524,7 @@ void STDMETHODCALLTYPE DrawIndexedInstancedT(ID3D11DeviceContext* c, UINT n, UIN
         Add("%u DrawIndexedInstanced %u x%u start %u base %d si %u", ++g_seq, n, inst, start, base, si);
         DrawState(c);
     }
-    if (!D && c == g_ctx) {
+    if (!D && c == g_ctx && !DlaaBusy()) {
         StereoProbe(c);
         if (!HudBeforeDraw(c, n, true)) return;
     }
@@ -532,7 +537,7 @@ void STDMETHODCALLTYPE DrawInstancedT(ID3D11DeviceContext* c, UINT n, UINT inst,
         Add("%u DrawInstanced %u x%u start %u si %u", ++g_seq, n, inst, start, si);
         DrawState(c);
     }
-    if (!D && c == g_ctx) {
+    if (!D && c == g_ctx && !DlaaBusy()) {
         StereoProbe(c);
         if (!HudBeforeDraw(c, n, false)) return;
     }
@@ -547,7 +552,8 @@ void STDMETHODCALLTYPE OMSetRTT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTarg
         Add("%u SetRT n%u%s ds:%s\n", ++g_seq, n, s.c_str(), Dsv(dsv).c_str());
     }
     (D ? d_OMSetRT : o_OMSetRT)(c, n, rtv, dsv);
-    if (!D && c == g_ctx) HudOnSetRenderTargets(c, n, rtv, dsv);
+    if (!DlaaBusy() || c != g_ctx) DlaaOnSetRenderTargets(n, rtv, dsv);
+    if (!D && c == g_ctx && !DlaaBusy()) HudOnSetRenderTargets(c, n, rtv, dsv);
 }
 template <bool D>
 void STDMETHODCALLTYPE OMSetRTUAVT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* rtv, ID3D11DepthStencilView* dsv,
@@ -563,7 +569,8 @@ void STDMETHODCALLTYPE OMSetRTUAVT(ID3D11DeviceContext* c, UINT n, ID3D11RenderT
             n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL ? Dsv(dsv).c_str() : "keep", us, un, u.c_str());
     }
     (D ? d_OMSetRTUAV : o_OMSetRTUAV)(c, n, rtv, dsv, us, un, uav, cnt);
-    if (!D && c == g_ctx && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) HudOnSetRenderTargets(c, n, rtv, dsv);
+    if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && (!DlaaBusy() || c != g_ctx)) DlaaOnSetRenderTargets(n, rtv, dsv);
+    if (!D && c == g_ctx && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && !DlaaBusy()) HudOnSetRenderTargets(c, n, rtv, dsv);
 }
 template <bool D>
 void STDMETHODCALLTYPE CopySubT(ID3D11DeviceContext* c, ID3D11Resource* dst, UINT ds, UINT x, UINT y, UINT z, ID3D11Resource* src,
@@ -675,7 +682,7 @@ void Install(ID3D11Device* dev) {
     Log("context hooks: %d of 13 on %p (Draw lives in %ls). F2 records one frame to ds3vr_draws_N.txt", ok,
         static_cast<void*>(ctx), mod);
 
-    Log("context hooks: deferred contexts are hooked when needed (F2 recording)");
+    Log("context hooks: deferred contexts are hooked when needed (F2 recording or DLAA)");
 }
 
 // DS3's deferred contexts (worker threads): hooked only when a feature needs them, so a normal run
@@ -738,6 +745,12 @@ void WriteFile() {
 } // namespace
 
 void DrawLogRequest() { g_request = true; }
+
+bool StereoParamsGet(float* sep, float* conv) {
+    *sep = g_stereoSep.load();
+    *conv = g_stereoConv.load();
+    return *sep > 0.f;
+}
 
 void CtxSetRenderTargetsRaw(ID3D11DeviceContext* c, unsigned n, ID3D11RenderTargetView* const* rtv, ID3D11DepthStencilView* dsv) {
     if (o_OMSetRT) o_OMSetRT(c, n, rtv, dsv);

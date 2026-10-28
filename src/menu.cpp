@@ -12,7 +12,9 @@
 
 #include "MinHook.h"
 #include "camhook.h"
+#include "dlss.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_dx11.h"
 #include "log.h"
 #include "menu_font.h"
@@ -59,8 +61,9 @@ void Filter(XINPUT_STATE* s) {
         const DWORD pkt = s->dwPacketNumber;
         ZeroMemory(&s->Gamepad, sizeof(s->Gamepad));
         s->dwPacketNumber = pkt;
-    } else if (g_swallowThumbs.load(std::memory_order_relaxed)) {
-        s->Gamepad.wButtons &= ~(XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB);
+    } else {
+        if (g_swallowThumbs.load(std::memory_order_relaxed))
+            s->Gamepad.wButtons &= ~(XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB);
     }
 }
 
@@ -201,7 +204,7 @@ void BuildUi() {
     }
     ImGui::Begin("DS3 VR", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+                     ImGuiWindowFlags_NoSavedSettings);
     ImGui::TextColored(kMenuAccent, "DARK SOULS III VR");
     ImGui::SameLine();
     ImGui::TextDisabled("v" DS3VR_VERSION);
@@ -222,6 +225,46 @@ void BuildUi() {
         if (lock) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
         if (ImGui::Button(lock ? "On  (stick does not tilt the view)" : "Off  (free camera)", ImVec2(0.f, 0.f))) CamHookSetHorizonLock(!lock);
         if (lock) ImGui::PopStyleColor();
+    }
+    // DLAA (test build): off, on, or the jitter test (image wobbles, DLAA off)
+    {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("DLAA  (test)");
+        ImGui::SameLine(430.f);
+        const int m = DlaaMode();
+        const char* names[3] = {"Off", "On", "Jitter test"};
+        for (int i = 0; i < 3; ++i) {
+            if (i) ImGui::SameLine();
+            const bool sel = m == i;
+            if (sel) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
+            if (ImGui::Button(names[i]) && !sel) DlaaSetMode(i);
+            if (sel) ImGui::PopStyleColor();
+        }
+        ImGui::TextDisabled("  Status");
+        ImGui::SameLine(430.f);
+        ImGui::TextDisabled("%s", DlaaStatus());
+        if (m == 1) {
+            const float js = DlaaJitterSign(), es = DlaaEyeSign();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("  DLAA directions");
+            ImGui::SameLine(430.f);
+            if (ImGui::Button(js > 0.f ? "Jitter +" : "Jitter -")) DlaaSetSigns(-js, es);
+            ImGui::SameLine();
+            if (ImGui::Button(es > 0.f ? "Eyes +" : "Eyes -")) DlaaSetSigns(js, -es);
+            const int pr = DlaaPreset();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("  DLAA model");
+            ImGui::SameLine(430.f);
+            const int presets[3] = {6, 11, 0};
+            const char* pnames[3] = {"CNN  (faster)", "Transformer", "Driver default"};
+            for (int i = 0; i < 3; ++i) {
+                if (i) ImGui::SameLine();
+                const bool sel = pr == presets[i];
+                if (sel) ImGui::PushStyleColor(ImGuiCol_Button, kMenuSelected);
+                if (ImGui::Button(pnames[i]) && !sel) DlaaSetPreset(presets[i]);
+                if (sel) ImGui::PopStyleColor();
+            }
+        }
     }
     ImGui::Spacing();
 
@@ -337,6 +380,16 @@ void BuildUi() {
     ImGui::Separator();
     ImGui::TextDisabled("Both sticks / Insert: open & close.  A: select.  B: close.");
     ImGui::TextDisabled("Keys: F6 HUD size, F7 HUD mode, F8 recenter");
+    // Keep the selected row in the middle of the panel when the menu is taller than the panel.
+    {
+        ImGuiContext& g = *GImGui;
+        ImGuiWindow* w = ImGui::GetCurrentWindow();
+        static ImGuiID lastNav = 0;
+        if (g.NavWindow == w && g.NavId && g.NavId != lastNav) {
+            lastNav = g.NavId;
+            ImGui::ScrollToRect(w, ImGui::WindowRectRelToAbs(w, w->NavRectRel[0]), ImGuiScrollFlags_AlwaysCenterY | ImGuiScrollFlags_KeepVisibleEdgeX);
+        }
+    }
     ImGui::End();
 }
 

@@ -384,8 +384,6 @@ void RenderSizeRefreshFromHeadset() {
         GetTickCount64() - t0);
 }
 
-
-
 void RenderSizePatchLetterbox() {
     ReadSettings();
     if (!g_w) return;

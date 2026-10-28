@@ -116,7 +116,7 @@ game's `Game` folder. `dist` holds the batch files, the player README and the de
 | `installer` | The patcher: unpacks and checks Helifax's fix, patches it for VR, backs up and restores |
 | `dist` | Files shipped as they are: install and uninstall batch files, player README, default settings |
 | `tools` | A patch test that runs the installer's patches on Helifax's files outside Windows |
-| `third_party` | Dear ImGui, MinHook, the OpenXR headers, EB Garamond (menu font, third_party/ebgaramond) and 7-Zip's C decoder |
+| `third_party` | Dear ImGui, MinHook, the OpenXR headers, EB Garamond (menu font, third_party/ebgaramond), and 7-Zip's C decoder |
 
 No files from geo-11 or Helifax's fix are in this repository: their licences do not allow
 redistribution. The install step only patches the copy each player downloads.
