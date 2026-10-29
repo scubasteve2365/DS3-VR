@@ -1371,6 +1371,15 @@ void DlssStepMipBiasOffset(int dir) {
     Log("DLSS: mip bias offset %.2f (bias in use %.2f)", v, CurrentBias());
 }
 float DlssMipBias() { return CurrentBias(); }
+void DlssResetTuning() {
+    DlaaSetSigns(1.f, 1.f);
+    DlssSetPairPrevious(true);
+    DlssSetHalvesSwapped(true);
+    g_biasOffset = -1.f;
+    g_biasGen.fetch_add(1);
+    WritePrivateProfileStringW(L"ds3vr", L"DlssMipBiasOffset", L"-1.00", Ini().c_str());
+    Log("DLSS: tuning settings back to defaults (jitter +, eyes +, previous frame, halves swapped, mip bias offset -1)");
+}
 
 bool DlaaBusy() { return g_busy.load(std::memory_order_relaxed); }
 

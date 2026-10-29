@@ -61,6 +61,7 @@ void DlssSetHalvesSwapped(bool) {}
 float DlssMipBias() { return 0.f; }
 float DlssMipBiasOffset() { return -1.f; }
 void DlssStepMipBiasOffset(int) {}
+void DlssResetTuning() {}
 constexpr int kSharpenLevels = 5;
 static const char* kSharpNames[kSharpenLevels] = {"Off", "Low", "Medium", "High", "Max"};
 int SharpenLevel() { return s_sharp; }

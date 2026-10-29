@@ -66,8 +66,9 @@ PLAY
   OpenXR > Set SteamVR as OpenXR runtime). Then launch Dark Souls III from Steam as usual.
 - The game renders at the resolution your VR runtime asks for; you do not set it in the game.
 - The first launch takes a little longer while geo-11 prepares its shaders.
-- Graphics: keep Shade Quality at Low (higher twitches in VR and stops DLSS working) and Motion
-  Blur and Depth of Field off. Do not change the resolution or screen mode in
+- Graphics: keep Motion Blur and Depth of Field off. Shade Quality Low is recommended (the install
+  step sets it); higher can cause a twitchy effect on some headsets, so test it if you raise it.
+  Do not change the resolution or screen mode in
   the game's menu while playing (the game would rebuild its graphics, which the stereo driver does
   not survive). Everything else is up to you.
 
@@ -102,6 +103,9 @@ Graphics tab, NVIDIA DLSS:
   next time you start the game. DLSS works on the finished picture here, so these look softer than
   DLSS in a normal game.
 The Status line shows how often DLSS is actually working, e.g. "DLAA working on 99% of frames".
+Fine-tuning: with Developer mode on, the Developer tab has the DLSS test settings (jitter and eye
+directions; for upscaling also pairing, halves and texture mip bias). The defaults suit most setups,
+but the best values can differ per headset and PC. "DLSS settings to defaults" puts them back.
 DLSS model: CNN is the default and the fastest; Transformer can look a little better and costs more.
 Sharpening (Off to Max) works with any setting, DLSS or not, if the image looks too soft for you.
 The game's own anti-aliasing should stay off (the install step sets it off).
@@ -161,9 +165,9 @@ DLSS options are unavailable:
   Game\ds3vr. An upscaling mode only applies after a restart.
 
 DLSS looks blurry, aliased or shimmery:
-  Check the Status line on the Graphics tab: DLSS should be working on nearly all frames. If not,
-  set the game's Shade Quality to Low and Antialiasing and Motion Blur off. The upscaling modes
-  are experimental and always softer than DLAA.
+  Check the Status line on the Graphics tab: DLSS should be working on nearly all frames. Keep the
+  game's Antialiasing and Motion Blur off. The upscaling modes are experimental and always softer
+  than DLAA; the Developer tab's DLSS settings can be tuned for your headset.
 
 The image looks soft:
   Try Sharpening on the Graphics tab (Low or Medium is usually enough).

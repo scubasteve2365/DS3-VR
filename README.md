@@ -90,10 +90,14 @@ The Status line on the Graphics tab shows how often DLSS is actually doing its j
 "DLAA working on 99% of frames". If DLSS misses frames, the mod turns its camera jitter and texture
 sharpening off for them, so a miss looks like DLSS off rather than worse.
 
+**Fine-tuning:** with Developer mode on, the Developer tab has the DLSS test settings (jitter and eye
+directions, and for the upscaling modes the frame pairing, halves and texture mip bias). The defaults
+suit most setups, but the best values can differ per headset and PC, so feel free to experiment.
+"DLSS settings to defaults" (or Reset to defaults) puts them back.
+
 ### Graphics settings
 
-The install step sets these for you. Keep Shade Quality at Low and Motion Blur and Depth of Field off;
-the rest is up to you.
+The install step sets these for you. Keep Motion Blur and Depth of Field off; the rest is up to you.
 
 | Setting | Set to | Why |
 |---|---|---|
@@ -102,7 +106,7 @@ the rest is up to you.
 | Depth of Field | Off | It blurs whatever you are not looking at in VR |
 | Ambient Occlusion | Off | In 3D it can show noise in lit areas |
 | Antialiasing | Off | Use DLAA instead (RTX cards); the game's own is not needed |
-| Shade Quality | Low | Higher settings cause a twitchy effect in VR and stop DLSS finding the 3D image. DS3 VR 2.0.1 sets it to Low once when you update; you can change it back. |
+| Shade Quality | Low (recommended) | Higher settings can cause a twitchy effect in VR on some headsets. If you raise it, test it on your own headset. |
 
 Do not change the resolution or screen mode in the game's own menu while playing: the game would
 rebuild its graphics, which the stereo driver does not survive.
@@ -149,9 +153,9 @@ status line under the DLSS setting says why it is off. Check that `ds3vr_ngx.dll
 and `NVIDIA_DLSS_LICENSE.txt` are in `Game\ds3vr`. An upscaling mode only applies after a restart.
 
 **DLSS looks blurry, aliased or shimmery.** Check the Status line on the Graphics tab: it should say
-DLSS is working on nearly all frames. If not, set the game's Shade Quality to Low and Antialiasing
-and Motion Blur off. The upscaling modes (Quality to Ultra Perf) are experimental and always softer
-than DLAA.
+DLSS is working on nearly all frames. Keep the game's Antialiasing and Motion Blur off. The upscaling
+modes (Quality to Ultra Perf) are experimental and always softer than DLAA; the Developer tab's DLSS
+settings can be tuned for your headset (see Fine-tuning above).
 
 **The image looks soft.** Try Sharpening on the Graphics tab (Low or Medium is usually enough).
 

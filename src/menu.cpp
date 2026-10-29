@@ -360,8 +360,8 @@ void TabGraphics(char* v, size_t vn) {
     ImGui::TextDisabled("  Set in your VR runtime (SteamVR, Virtual Desktop, Meta, Pimax Play).");
     ImGui::TextDisabled("  The game reads it each time it starts.");
     ImGui::Spacing();
-    ImGui::TextDisabled("  Game settings: keep Shade Quality at Low (higher twitches in VR");
-    ImGui::TextDisabled("  and stops DLSS working), and Antialiasing and Motion Blur off.");
+    ImGui::TextDisabled("  Game settings: Shade Quality Low is recommended (higher can twitch");
+    ImGui::TextDisabled("  on some headsets; test it yourself). Antialiasing and Motion Blur off.");
 }
 
 void TabDeveloper(char* v, size_t vn) {
@@ -400,6 +400,12 @@ void TabDeveloper(char* v, size_t vn) {
         if (ImGui::Button(sw ? "Halves swapped" : "Halves normal")) DlssSetHalvesSwapped(!sw);
         snprintf(v, vn, "%+.2f  (offset %+.2f)", DlssMipBias(), DlssMipBiasOffset());
         if (const int d = Stepper("Texture mip bias", v, "mb")) DlssStepMipBiasOffset(d);
+    }
+    if (live != kDlssOff) {
+        ImGui::Spacing();
+        ImGui::TextDisabled("  The defaults suit most setups; the best DLSS settings can differ per");
+        ImGui::TextDisabled("  headset and PC. This button puts them back (so does Reset to defaults).");
+        if (ImGui::Button("DLSS settings to defaults")) DlssResetTuning();
     }
 }
 
@@ -450,6 +456,7 @@ void BuildUi() {
         CamHookSetDecoupledPitch(0);
         DlssSetMode(kDlssOff);
         DlaaSetPreset(6);
+        DlssResetTuning();
         SharpenSetLevel(0);
         SetDevKeys(false);
         Log("menu: settings reset to defaults");

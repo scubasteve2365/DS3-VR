@@ -69,6 +69,7 @@ bool DlssHalvesSwapped();         // upscaling: geo-11's left half holds slice 1
 void DlssSetHalvesSwapped(bool on);
 float DlssMipBiasOffset();        // added to log2(render / headset) for scene textures (NVIDIA: -1)
 void DlssStepMipBiasOffset(int dir);
+void DlssResetTuning();           // the test settings above back to their defaults (saved)
 float DlssMipBias();              // the bias in use (0 when not upscaling)
 
 // Called from the context hooks in drawlog.cpp.
