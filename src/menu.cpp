@@ -303,7 +303,7 @@ void TabGraphics(char* v, size_t vn) {
         ImGui::SetCursorPosX(430.f);
         ImGui::TextDisabled("Upscaling modes apply when you restart the game.");
     }
-    ImGui::TextDisabled("  DLAA: smoother edges.  Quality to Ultra Perf: more frame rate.");
+    ImGui::TextDisabled("  DLAA: smoother edges.  Quality to Ultra Perf (experimental): more frame rate.");
     {
         const int pr = DlaaPreset();
         Label("DLSS model");
@@ -359,6 +359,9 @@ void TabGraphics(char* v, size_t vn) {
     ImGui::TextUnformatted(v);
     ImGui::TextDisabled("  Set in your VR runtime (SteamVR, Virtual Desktop, Meta, Pimax Play).");
     ImGui::TextDisabled("  The game reads it each time it starts.");
+    ImGui::Spacing();
+    ImGui::TextDisabled("  Game settings: keep Shade Quality at Low (higher twitches in VR");
+    ImGui::TextDisabled("  and stops DLSS working), and Antialiasing and Motion Blur off.");
 }
 
 void TabDeveloper(char* v, size_t vn) {

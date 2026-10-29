@@ -168,14 +168,28 @@ float g_jitterSign = 1.f;              // ds3vr.ini DlaaJitterSign (flip if stan
 float g_eyeSign = 1.f;                 // ds3vr.ini DlaaEyeSign: geo-11's shift sign for slice 0 (+1) or slice 1
 std::atomic<int> g_preset{6};          // ds3vr.ini DlaaPreset: 0 driver default, 6 CNN (preset F, faster), 11 transformer (preset K)
 std::atomic<bool> g_presetChanged{false};
-std::atomic<bool> g_pairPrev{false};   // ds3vr.ini DlssPairPrevious
-std::atomic<bool> g_halvesSwapped{false};  // ds3vr.ini DlssHalvesSwapped
+std::atomic<bool> g_pairPrev{true};    // ds3vr.ini DlssPairPrevious (default: previous frame, picked on Steve's Quest 3 and Dream Air)
+std::atomic<bool> g_halvesSwapped{true};   // ds3vr.ini DlssHalvesSwapped (default: swapped; geo-11 puts the left eye in the right half)
 std::atomic<float> g_biasOffset{-1.f}; // ds3vr.ini DlssMipBiasOffset (NVIDIA's guide: log2(render / display) - 1)
 std::atomic<int> g_biasGen{1};         // changes when the bias changes: sampler twins are remade
 
+// Frames (Presents) since DLSS last did its job: DLAA evaluated, or an upscale with fresh depth and motion.
+// While it is not doing its job, the camera jitter and the texture mip bias are off, so a miss looks like
+// DLSS off rather than worse (an unresolved jitter shimmers, an unresolved bias aliases).
+std::atomic<unsigned> g_presentsSinceGood{1000};
+constexpr unsigned kGoodWithin = 8;
+bool Healthy() { return g_presentsSinceGood.load(std::memory_order_relaxed) < kGoodWithin; }
+std::atomic<unsigned> g_hrGood{0};   // frames DLSS did its job, for the menu's hit rate
+std::atomic<int> g_hitPct{-1};       // that rate over the last 2 s (-1 = not measured yet)
+void MarkGood() {
+    g_presentsSinceGood.store(0, std::memory_order_relaxed);
+    g_hrGood.fetch_add(1, std::memory_order_relaxed);
+}
+
 bool Jittering() {
     const int m = g_live.load(std::memory_order_relaxed);
-    return m != kDlssOff && !g_ngxFailed.load(std::memory_order_relaxed) && !(m >= kDlssQuality && g_upFailed.load(std::memory_order_relaxed));
+    return m != kDlssOff && !g_ngxFailed.load(std::memory_order_relaxed) && !(m >= kDlssQuality && g_upFailed.load(std::memory_order_relaxed)) &&
+           Healthy();
 }
 
 // ---------- jitter (Halton 2,3; 16 phases, as NVIDIA suggests) ----------
@@ -203,11 +217,25 @@ void JitterFor(unsigned frame, float* x, float* y) {  // pixels, x right, y down
 }
 
 // ---------- the scene targets (found as the game binds them) ----------
+// Every colour + depth pair that looks like the 3D scene (HDR colour and depth, both 2-slice, same size) is a
+// candidate. With Shade Quality above Low, DS3 draws several such pairs per frame, so the shape alone is not
+// enough: the scene is the candidate colour that post-processing reads first (DlaaBeforeDraw), with the depth
+// it was drawn with most. Candidates are only added (and keep a reference) until the size changes.
 std::mutex g_sceneMutex;
-ID3D11Texture2D* g_scene = nullptr;  // HDR scene colour, 2 slices (kept alive with a reference)
-ID3D11Texture2D* g_depth = nullptr;  // main depth, 2 slices
+ID3D11Texture2D* g_scene = nullptr;  // the chosen HDR scene colour, 2 slices (kept alive with a reference)
+ID3D11Texture2D* g_depth = nullptr;  // its depth, 2 slices
 std::atomic<unsigned> g_sceneW{0}, g_sceneH{0};
 std::atomic<void*> g_lastRtv{nullptr}, g_lastDsv{nullptr};  // the pair checked last (skip repeats cheaply)
+struct SceneCand {
+    std::atomic<ID3D11Texture2D*> colour{nullptr};  // read without the lock: only compared
+    std::atomic<ID3D11Texture2D*> depth{nullptr};
+    std::atomic<unsigned> binds{0};  // times bound as a render target pair (halved every 10 s)
+    std::atomic<unsigned> reads{0};  // times post-processing started from this colour (this 10 s)
+};
+constexpr int kMaxScene = 16;
+SceneCand g_sc[kMaxScene];
+std::atomic<int> g_scCount{0};
+std::atomic<unsigned> g_statSceneSwitch{0};
 
 // ---------- camera constants (cbSceneParam, b8) ----------
 // Float4 registers: c1 FC_ScreenSize, c3 SC_CameraPos, c16..c19 FC_MatrixProj, c24..c27 VC_MatrixViewProj.
@@ -332,11 +360,14 @@ std::unordered_map<ID3D11SamplerState*, Twin> g_twins;  // the originals are Add
 std::atomic<unsigned> g_statTwins{0}, g_statBiased{0};
 ID3D11DeviceContext* g_immediate = nullptr;  // compared only
 
-float CurrentBias() {
+// The bias for this run's upscaling mode (0 when not upscaling).
+float ModeBias() {
     const int m = g_live.load(std::memory_order_relaxed);
     if (m < kDlssQuality || g_upFailed.load(std::memory_order_relaxed) || g_ngxFailed.load(std::memory_order_relaxed)) return 0.f;
     return std::log2(kModeScale[m]) + g_biasOffset.load(std::memory_order_relaxed);
 }
+// The bias in use now: none while DLSS is not doing its job (see Healthy).
+float CurrentBias() { return Healthy() ? ModeBias() : 0.f; }
 
 ID3D11SamplerState* TwinOf(ID3D11SamplerState* s) {
     if (!s) return s;
@@ -349,7 +380,7 @@ ID3D11SamplerState* TwinOf(ID3D11SamplerState* s) {
     if (hit) return t ? t : s;
     D3D11_SAMPLER_DESC d{};
     s->GetDesc(&d);
-    const float bias = CurrentBias();
+    const float bias = ModeBias();  // twins are made for the mode's bias; CurrentBias decides whether they are used
     // Comparison / minimum / maximum filters (shadow maps and the like) and samplers without mips stay as they are.
     const bool eligible = bias != 0.f && !(d.Filter & 0x180) && d.MaxLOD > 0.f;
     ID3D11SamplerState* twin = nullptr;
@@ -1020,6 +1051,7 @@ void RunDlaa(ID3D11DeviceContext* c) {
             if (r == 1) {
                 c->CopySubresourceRegion(f.scene, sub, 0, 0, 0, g_d.out, 0, nullptr);
                 g_statEvals.fetch_add(1, std::memory_order_relaxed);
+                if (e == 1) MarkGood();
             } else {
                 g_statFail.fetch_add(1, std::memory_order_relaxed);
                 if (r != g_lastEvalResult) Log("DLAA: DLSS evaluate failed for eye %u: %s", e, g_ngx.ResultString(r));
@@ -1279,6 +1311,7 @@ bool DlssUpscale(ID3D11DeviceContext* ctx, ID3D11Texture2D* stereo, ID3D11Textur
         }
     });
     if (fresh) g_u.usedSeq = want;
+    if (fresh && g_lastEvalResult == 1) MarkGood();
     g_u.fresh = false;
     if (!g_ready && g_u.statEvals > 0) {
         g_ready = true;
@@ -1364,20 +1397,50 @@ void DlaaOnSetRenderTargets(unsigned n, ID3D11RenderTargetView* const* rtv, ID3D
         const bool match = c.Format == DXGI_FORMAT_R16G16B16A16_FLOAT && c.ArraySize == 2 && c.SampleDesc.Count == 1 &&
                            d.Format == DXGI_FORMAT_R32G8X24_TYPELESS && d.ArraySize == 2 && (d.BindFlags & D3D11_BIND_SHADER_RESOURCE) &&
                            c.Width == d.Width && c.Height == d.Height;
-        // DS3 also lights a half-size copy the same way: keep the full-size one (the largest seen).
-        const bool largest = static_cast<unsigned long long>(c.Width) * c.Height >=
-                             static_cast<unsigned long long>(g_sceneW.load()) * g_sceneH.load();
-        if (match && largest) {
-            std::lock_guard<std::mutex> lock(g_sceneMutex);
-            if (g_scene != ct || g_depth != dt) {
-                SafeRelease(g_scene);
-                SafeRelease(g_depth);
-                g_scene = ct;
-                g_depth = dt;
-                ct = dt = nullptr;  // kept
-                g_sceneW = c.Width;
-                g_sceneH = c.Height;
-                Log("DLSS: scene colour and depth found, %ux%u per eye", c.Width, c.Height);
+        // DS3 also lights a half-size copy the same way: keep the full-size ones (the largest seen).
+        const unsigned long long area = static_cast<unsigned long long>(c.Width) * c.Height,
+                                 have = static_cast<unsigned long long>(g_sceneW.load()) * g_sceneH.load();
+        if (match && area >= have) {
+            const int n = g_scCount.load(std::memory_order_acquire);
+            int found = -1;
+            if (area == have)
+                for (int i = 0; i < n && found < 0; ++i)
+                    if (g_sc[i].colour.load(std::memory_order_relaxed) == ct && g_sc[i].depth.load(std::memory_order_relaxed) == dt) found = i;
+            if (found >= 0) {
+                g_sc[found].binds.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                std::lock_guard<std::mutex> lock(g_sceneMutex);
+                int m = g_scCount.load();
+                if (area > static_cast<unsigned long long>(g_sceneW.load()) * g_sceneH.load()) {
+                    // A larger size: the earlier (smaller) candidates are not the scene.
+                    for (int i = 0; i < m; ++i) {
+                        ID3D11Texture2D* oc = g_sc[i].colour.exchange(nullptr);
+                        ID3D11Texture2D* od = g_sc[i].depth.exchange(nullptr);
+                        SafeRelease(oc);
+                        SafeRelease(od);
+                        g_sc[i].binds = 0;
+                        g_sc[i].reads = 0;
+                    }
+                    g_scCount.store(0, std::memory_order_release);
+                    m = 0;
+                    SafeRelease(g_scene);
+                    SafeRelease(g_depth);
+                    g_sceneW = c.Width;
+                    g_sceneH = c.Height;
+                }
+                bool dup = false;  // another thread may have added it meanwhile
+                for (int i = 0; i < m && !dup; ++i)
+                    dup = g_sc[i].colour.load() == ct && g_sc[i].depth.load() == dt;
+                if (!dup && m < kMaxScene) {
+                    g_sc[m].colour.store(ct);
+                    g_sc[m].depth.store(dt);
+                    g_sc[m].binds = 1;
+                    g_sc[m].reads = 0;
+                    g_scCount.store(m + 1, std::memory_order_release);
+                    ct = dt = nullptr;  // kept by the candidate
+                    Log("DLSS: scene candidate %d (colour and depth), %ux%u per eye%s", m + 1, c.Width, c.Height,
+                        m == 0 ? "" : "; the one post-processing reads is used");
+                }
             }
         }
     }
@@ -1390,17 +1453,41 @@ void DlaaBeforeDraw(ID3D11DeviceContext* c) {
     if (g_busy.load(std::memory_order_relaxed) || live == kDlssOff || g_ngxFailed.load(std::memory_order_relaxed)) return;
     if (live >= kDlssQuality && g_upFailed.load(std::memory_order_relaxed)) return;
     if (g_doneSincePresent.load(std::memory_order_relaxed)) return;  // once per frame
-    ID3D11Texture2D* scene = g_scene;  // read without the lock: only compared
-    if (!scene) return;
+    const int n = g_scCount.load(std::memory_order_acquire);
+    if (!n) return;
     ID3D11ShaderResourceView* srv = nullptr;
     c->PSGetShaderResources(0, 1, &srv);
     if (!srv) return;
     ID3D11Resource* r = nullptr;
     srv->GetResource(&r);
     srv->Release();
-    const bool hit = r == scene;
+    // Post-processing starts by reading the scene colour: which candidate is it? Of the pairs with that
+    // colour, the depth it was drawn with most.
+    int pick = -1;
+    for (int i = 0; i < n; ++i)
+        if (g_sc[i].colour.load(std::memory_order_relaxed) == r &&
+            (pick < 0 || g_sc[i].binds.load(std::memory_order_relaxed) > g_sc[pick].binds.load(std::memory_order_relaxed)))
+            pick = i;
     SafeRelease(r);
-    if (!hit) return;
+    if (pick < 0) return;
+    g_sc[pick].reads.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_sceneMutex);
+        ID3D11Texture2D* pc = g_sc[pick].colour.load();
+        ID3D11Texture2D* pd = g_sc[pick].depth.load();
+        if (!pc || !pd) return;  // cleared meanwhile (size change)
+        if (g_scene != pc || g_depth != pd) {
+            const bool first = !g_scene;
+            SafeRelease(g_scene);
+            SafeRelease(g_depth);
+            g_scene = pc;
+            g_depth = pd;
+            pc->AddRef();
+            pd->AddRef();
+            if (first) Log("DLSS: scene found (candidate %d of %d, the one post-processing reads)", pick + 1, n);
+            else g_statSceneSwitch.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
     if (!g_c.started && !Start(c)) {
         g_ngxFailed = true;
         return;
@@ -1421,6 +1508,21 @@ void DlssOnPresent(ID3D11Device* device) {
     static bool installed = false;
     if (!device) return;
     if (!g_doneSincePresent.exchange(false)) g_frame.fetch_add(1, std::memory_order_relaxed);
+    if (g_presentsSinceGood.load(std::memory_order_relaxed) < 100000) g_presentsSinceGood.fetch_add(1, std::memory_order_relaxed);
+    {
+        // The menu's hit rate: share of frames over the last 2 s on which DLSS did its job.
+        static unsigned presents = 0;
+        static ULONGLONG windowEnd = 0;
+        const ULONGLONG t = GetTickCount64();
+        ++presents;
+        if (!windowEnd) windowEnd = t + 2000;
+        if (t >= windowEnd) {
+            const unsigned good = g_hrGood.exchange(0);
+            g_hitPct = presents ? static_cast<int>(std::min(100u, (good * 100u + presents / 2) / presents)) : -1;
+            presents = 0;
+            windowEnd = t + 2000;
+        }
+    }
     if (!installed) {
         installed = true;
         const std::wstring ini = Ini();
@@ -1431,8 +1533,8 @@ void DlssOnPresent(ID3D11Device* device) {
         g_jitterSign = GetPrivateProfileIntW(L"ds3vr", L"DlaaJitterSign", 1, ini.c_str()) < 0 ? -1.f : 1.f;
         g_eyeSign = GetPrivateProfileIntW(L"ds3vr", L"DlaaEyeSign", 1, ini.c_str()) < 0 ? -1.f : 1.f;
         g_preset = GetPrivateProfileIntW(L"ds3vr", L"DlaaPreset", 6, ini.c_str());  // CNN: about 60% of the transformer's cost, looks the same here
-        g_pairPrev = GetPrivateProfileIntW(L"ds3vr", L"DlssPairPrevious", 0, ini.c_str()) != 0;
-        g_halvesSwapped = GetPrivateProfileIntW(L"ds3vr", L"DlssHalvesSwapped", 0, ini.c_str()) != 0;
+        g_pairPrev = GetPrivateProfileIntW(L"ds3vr", L"DlssPairPrevious", 1, ini.c_str()) != 0;
+        g_halvesSwapped = GetPrivateProfileIntW(L"ds3vr", L"DlssHalvesSwapped", 1, ini.c_str()) != 0;
         {
             wchar_t v[32] = {};
             GetPrivateProfileStringW(L"ds3vr", L"DlssMipBiasOffset", L"-1", v, 32, ini.c_str());
@@ -1475,6 +1577,18 @@ void DlssOnPresent(ID3D11Device* device) {
                 "camera from another jitter phase %u; %d camera buffers",
                 g_statMain.exchange(0), g_statOtherView.exchange(0), g_statHalf.exchange(0), g_statOther.exchange(0), g_statEvals.exchange(0),
                 g_statFail.exchange(0), g_statStale.exchange(0), g_cbCount.load());
+            {
+                const int n = g_scCount.load();
+                char list[256] = {};
+                size_t used = 0;
+                for (int i = 0; i < n && used + 32 < sizeof(list); ++i) {
+                    used += static_cast<size_t>(snprintf(list + used, sizeof(list) - used, "%s#%d %u binds %u reads", i ? ", " : "", i + 1,
+                                                         g_sc[i].binds.load(), g_sc[i].reads.exchange(0)));
+                    g_sc[i].binds.store(g_sc[i].binds.load() / 2);
+                }
+                Log("DLSS: scene: %d candidate(s) [%s]; scene switches %u; DLSS did its job on %d%% of frames (last 2 s)", n, list,
+                    g_statSceneSwitch.exchange(0), g_hitPct.load());
+            }
             if (g_live.load() >= kDlssQuality)
                 Log("DLSS: upscaling: %u frames upscaled, %u without fresh motion (reset); scene samplers %u seen, %u biased binds, bias %.2f",
                     g_u.statEvals / 2, g_u.statStale, g_statTwins.load(), g_statBiased.exchange(0), CurrentBias());
@@ -1497,9 +1611,15 @@ void DlssOnPresent(ID3D11Device* device) {
             if (g_status.rfind("not available", 0) != 0 && g_status.rfind("failed", 0) != 0) g_status = "failed (see ds3vr.log)";
         } else {
             if (live == kDlssOff) snprintf(s, sizeof(s), "off");
-            else if (live == kDlssDlaa) snprintf(s, sizeof(s), g_ready ? "DLAA running" : "DLAA starting...");
-            else if (g_u.ow) snprintf(s, sizeof(s), "%s: %u x %u upscaled to %u x %u", kModeNames[live], g_u.w, g_u.h, g_u.ow, g_u.oh);
-            else snprintf(s, sizeof(s), "%s starting...", kModeNames[live]);
+            else {
+                // How often DLSS actually did its job (DLAA ran / the upscale had fresh depth and motion).
+                const int pct = g_hitPct.load();
+                const char* name = kModeNames[live];
+                if (!g_ready && live == kDlssDlaa) snprintf(s, sizeof(s), "DLAA starting...");
+                else if (live >= kDlssQuality && !g_u.ow) snprintf(s, sizeof(s), "%s starting...", name);
+                else if (pct <= 0) snprintf(s, sizeof(s), "%s on, waiting for the game world", name);
+                else snprintf(s, sizeof(s), "%s working on %d%% of frames", name, pct);
+            }
             if (saved != live && (saved >= kDlssQuality || live >= kDlssQuality)) {
                 const size_t n = strlen(s);
                 snprintf(s + n, sizeof(s) - n, ";  %s at next launch", kModeNames[saved]);

@@ -78,7 +78,7 @@ On NVIDIA RTX graphics cards, the Graphics tab offers:
 |---|---|
 | Off | The game's own image |
 | DLAA | Anti-aliasing at full resolution: edges and fine detail stop shimmering. Costs a little frame rate. Switches straight away. |
-| Quality, Balanced, Performance, Ultra Perf | Upscaling: the game renders each eye smaller and DLSS rebuilds it at your headset's resolution, for more frame rate. Applies the next time you start the game. |
+| Quality, Balanced, Performance, Ultra Perf (experimental) | Upscaling: the game renders each eye smaller and DLSS rebuilds it at your headset's resolution, for more frame rate. Applies the next time you start the game. Because geo-11 makes the stereo image, DLSS upscales the finished picture (after the game's effects), so these look softer than DLSS in a normal game. |
 
 Each eye gets its own DLSS pass with its own motion data, worked out from the game's depth and camera
 with geo-11's per-eye shift taken out, so the two eyes stay matched. The **DLSS model** can be CNN
@@ -86,9 +86,14 @@ with geo-11's per-eye shift taken out, so the two eyes stay matched. The **DLSS 
 works with any setting if the image looks too soft for you. The two NVIDIA files come in the
 download's `ds3vr` folder.
 
+The Status line on the Graphics tab shows how often DLSS is actually doing its job, for example
+"DLAA working on 99% of frames". If DLSS misses frames, the mod turns its camera jitter and texture
+sharpening off for them, so a miss looks like DLSS off rather than worse.
+
 ### Graphics settings
 
-The install step sets these for you. Keep Motion Blur and Depth of Field off; the rest is up to you.
+The install step sets these for you. Keep Shade Quality at Low and Motion Blur and Depth of Field off;
+the rest is up to you.
 
 | Setting | Set to | Why |
 |---|---|---|
@@ -97,6 +102,7 @@ The install step sets these for you. Keep Motion Blur and Depth of Field off; th
 | Depth of Field | Off | It blurs whatever you are not looking at in VR |
 | Ambient Occlusion | Off | In 3D it can show noise in lit areas |
 | Antialiasing | Off | Use DLAA instead (RTX cards); the game's own is not needed |
+| Shade Quality | Low | Higher settings cause a twitchy effect in VR and stop DLSS finding the 3D image. DS3 VR 2.0.1 sets it to Low once when you update; you can change it back. |
 
 Do not change the resolution or screen mode in the game's own menu while playing: the game would
 rebuild its graphics, which the stereo driver does not survive.
@@ -141,6 +147,11 @@ can stutter while geo-11 prepares its shaders.
 **DLSS options are unavailable.** DLSS needs an NVIDIA RTX graphics card and a recent driver. The
 status line under the DLSS setting says why it is off. Check that `ds3vr_ngx.dll`, `nvngx_dlss.dll`
 and `NVIDIA_DLSS_LICENSE.txt` are in `Game\ds3vr`. An upscaling mode only applies after a restart.
+
+**DLSS looks blurry, aliased or shimmery.** Check the Status line on the Graphics tab: it should say
+DLSS is working on nearly all frames. If not, set the game's Shade Quality to Low and Antialiasing
+and Motion Blur off. The upscaling modes (Quality to Ultra Perf) are experimental and always softer
+than DLAA.
 
 **The image looks soft.** Try Sharpening on the Graphics tab (Low or Medium is usually enough).
 

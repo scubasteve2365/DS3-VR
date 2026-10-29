@@ -43,7 +43,7 @@ choose Run). It:
 - switches geo-11 to VR output and adds a few lines to five of the fix's shaders (HUD, lock-on
   marker and sun rays)
 - sets the game's graphics options for VR (windowed; motion blur, depth of field, ambient occlusion
-  and antialiasing off). Your previous settings are saved too.
+  and antialiasing off; Shade Quality Low). Your previous settings are saved too.
 Every change is checked before anything is written. If something does not fit, nothing is changed.
 
 If you start the game before running it, DS3 VR stays off and tells you to run it.
@@ -66,7 +66,8 @@ PLAY
   OpenXR > Set SteamVR as OpenXR runtime). Then launch Dark Souls III from Steam as usual.
 - The game renders at the resolution your VR runtime asks for; you do not set it in the game.
 - The first launch takes a little longer while geo-11 prepares its shaders.
-- Graphics: keep Motion Blur and Depth of Field off. Do not change the resolution or screen mode in
+- Graphics: keep Shade Quality at Low (higher twitches in VR and stops DLSS working) and Motion
+  Blur and Depth of Field off. Do not change the resolution or screen mode in
   the game's menu while playing (the game would rebuild its graphics, which the stereo driver does
   not survive). Everything else is up to you.
 
@@ -96,9 +97,11 @@ Graphics tab, NVIDIA DLSS:
 - Off: the game's own image.
 - DLAA: anti-aliasing at full resolution. Edges and fine detail stop shimmering; costs a little
   frame rate. Takes effect straight away.
-- Quality, Balanced, Performance, Ultra Perf: upscaling. The game renders each eye smaller and DLSS
-  rebuilds it at your headset's resolution, for more frame rate. Takes effect the next time you
-  start the game.
+- Quality, Balanced, Performance, Ultra Perf (experimental): upscaling. The game renders each eye
+  smaller and DLSS rebuilds it at your headset's resolution, for more frame rate. Takes effect the
+  next time you start the game. DLSS works on the finished picture here, so these look softer than
+  DLSS in a normal game.
+The Status line shows how often DLSS is actually working, e.g. "DLAA working on 99% of frames".
 DLSS model: CNN is the default and the fastest; Transformer can look a little better and costs more.
 Sharpening (Off to Max) works with any setting, DLSS or not, if the image looks too soft for you.
 The game's own anti-aliasing should stay off (the install step sets it off).
@@ -156,6 +159,11 @@ DLSS options are unavailable:
   DLSS needs an NVIDIA RTX graphics card and a recent driver. The status line under the DLSS setting
   says why it is off. Check that ds3vr_ngx.dll, nvngx_dlss.dll and NVIDIA_DLSS_LICENSE.txt are in
   Game\ds3vr. An upscaling mode only applies after a restart.
+
+DLSS looks blurry, aliased or shimmery:
+  Check the Status line on the Graphics tab: DLSS should be working on nearly all frames. If not,
+  set the game's Shade Quality to Low and Antialiasing and Motion Blur off. The upscaling modes
+  are experimental and always softer than DLAA.
 
 The image looks soft:
   Try Sharpening on the Graphics tab (Low or Medium is usually enough).

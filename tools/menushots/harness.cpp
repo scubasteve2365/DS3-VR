@@ -10,7 +10,7 @@
 #include "imgui.h"
 #include "menu_font.h"
 
-#define DS3VR_VERSION "2.0.0"
+#define DS3VR_VERSION "2.0.1"
 typedef unsigned int UINT;
 
 namespace ds3vr {
@@ -44,7 +44,7 @@ int DlssModeSaved() { return s_dlssSaved; }
 int DlssModeNow() { return s_dlssLive; }
 int DlssAvailable() { return 1; }
 void DlssSetMode(int) {}
-const char* DlssStatus() { return s_dlssLive == 1 ? "DLAA running" : "off"; }
+const char* DlssStatus() { return s_dlssLive == 1 ? "DLAA working on 99% of frames" : "off"; }
 const char* DlssModeName(int m) { return kModeNames[m]; }
 float DlssModeScale(int) { return 1.f; }
 bool DlssUpscaling() { return false; }

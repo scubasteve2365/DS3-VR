@@ -253,6 +253,7 @@ const Tag kGraphicsTags[] = {
     {"SSAO", "DISABLE"},
     {"DepthOfField", "DISABLE"},
     {"MotionBlur", "DISABLE"},
+    {"ShadeQuality", "LOW"},                           // above Low: a twitchy effect in VR, and extra scene-like passes (DLSS)
 };
 } // namespace
 
@@ -296,7 +297,7 @@ std::string DefaultGraphicsConfig() {
            "<EffectsQuality>HIGH</EffectsQuality>\r\n"
            "<ReflectionQuality>HIGH</ReflectionQuality>\r\n"
            "<WaterSurfaceQuality>HIGH</WaterSurfaceQuality>\r\n"
-           "<ShadeQuality>HIGH</ShadeQuality>\r\n"
+           "<ShadeQuality>LOW</ShadeQuality>\r\n"
            "</config>\r\n";
 }
 

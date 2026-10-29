@@ -166,6 +166,25 @@ void UpdateGraphicsConfigImpl() {
         Log("RENDERSIZE: GraphicsConfig.xml has no windowed resolution entries; not changed");
         return;
     }
+    // Shade Quality above Low gives a twitchy effect in VR and adds scene-like passes that DLSS can mistake for
+    // the scene. Installs from 2.0.1 set Low; for earlier installs it is set once here, and after that the
+    // player's own choice stands.
+    {
+        const std::wstring ini = std::wstring(ModuleDir()) + L"ds3vr.ini";
+        if (GetPrivateProfileIntW(L"state", L"ShadeQualityLowSet", 0, ini.c_str()) == 0) {
+            const std::wstring o = L"<ShadeQuality>", c = L"</ShadeQuality>";
+            size_t a = xml.find(o), b = a == std::wstring::npos ? a : xml.find(c, a);
+            if (a != std::wstring::npos && b != std::wstring::npos) {
+                const std::wstring was = xml.substr(a + o.size(), b - a - o.size());
+                if (was != L"LOW") {
+                    xml.replace(a + o.size(), b - a - o.size(), L"LOW");
+                    Log("RENDERSIZE: Shade Quality set to Low (was %ls): above Low it twitches in VR and confuses DLSS. "
+                        "This is done once; a later change in the game's menu is kept.", was.c_str());
+                }
+            }
+            WritePrivateProfileStringW(L"state", L"ShadeQualityLowSet", L"1", ini.c_str());
+        }
+    }
     if (xml == before) return;
     f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
     if (f == INVALID_HANDLE_VALUE) return;
